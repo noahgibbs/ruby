@@ -1,3 +1,9 @@
+Sat Jun  4 01:38:30 2016  Noah Gibbs  <the.codefolio.guy@gmail.com>
+
+	* ext/date/date_strptime.c: don't permit 0 as a year for strptime's
+	  %Y format. Raise an ArgumentError.
+	  [Bug #12297]
+
 Fri Jun  3 21:27:22 2016  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* ruby.c (process_options): rb_str_conv_enc() never set encoding

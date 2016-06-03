@@ -483,6 +483,9 @@ class TestDateStrptime < Test::Unit::TestCase
     assert_raise(ArgumentError) do
       Date.strptime('01-31-2011', '%m/%d/%Y')
     end
+    assert_raise(ArgumentError) do
+      Date.strptime('01-31-0000', '%m/%d/%Y')
+    end
   end
 
   def test_given_string

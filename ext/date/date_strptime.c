@@ -544,6 +544,8 @@ date__strptime_internal(const char *str, size_t slen,
 			  READ_DIGITS_MAX(n)
 		    if (sign == -1)
 			n = f_negate(n);
+		    if (n == 0)
+			fail();
 		      set_hash("year", n);
 		      goto matched;
 		  }

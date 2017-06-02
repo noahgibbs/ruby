@@ -139,30 +139,14 @@ rb_hash(VALUE obj)
 
 long rb_objid_hash(st_index_t index);
 
-long
-rb_dbl_long_hash(double d)
-{
-    /* normalize -0.0 to 0.0 */
-    if (d == 0.0) d = 0.0;
-#if SIZEOF_INT == SIZEOF_VOIDP
-    return rb_memhash(&d, sizeof(d));
-#else
-    {
-	union {double d; uint64_t i;} u;
-
-	u.d = d;
-	return rb_objid_hash(rb_hash_start(u.i));
-    }
-#endif
-}
-
-static inline long
+static st_index_t
 any_hash(VALUE a, st_index_t (*other_func)(VALUE))
 {
     VALUE hval;
     st_index_t hnum;
 
     if (SPECIAL_CONST_P(a)) {
+	if (a == Qundef) return 0;
 	if (STATIC_SYM_P(a)) {
 	    hnum = a >> (RUBY_SPECIAL_SHIFT + ID_SCOPE_SHIFT);
 	    hnum = rb_hash_start(hnum);
@@ -186,7 +170,8 @@ any_hash(VALUE a, st_index_t (*other_func)(VALUE))
     }
     else if (BUILTIN_TYPE(a) == T_FLOAT) {
       flt:
-	hnum = rb_dbl_long_hash(rb_float_value(a));
+	hval = rb_dbl_hash(rb_float_value(a));
+	hnum = FIX2LONG(hval);
     }
     else {
 	hnum = other_func(a);
@@ -209,42 +194,34 @@ rb_any_hash(VALUE a)
     return any_hash(a, obj_any_hash);
 }
 
-/* Here is a hash function for 64-bit key.  It is about 5 times faster
-   (2 times faster when uint128 type is absent) on Haswell than
-   tailored Spooky or City hash function can be.  */
-
-/* Here we two primes with random bit generation.  */
-static const uint64_t prime1 = ((uint64_t)0x2e0bb864 << 32) | 0xe9ea7df5;
-static const uint64_t prime2 = ((uint64_t)0xcdb32970 << 32) | 0x830fcaa1;
-
-
-static inline uint64_t
-mult_and_mix(uint64_t m1, uint64_t m2)
+static st_index_t
+rb_num_hash_start(st_index_t n)
 {
-#if defined(__GNUC__) && UINT_MAX != ULONG_MAX
-    __uint128_t r = (__uint128_t) m1 * (__uint128_t) m2;
-    return (uint64_t) (r >> 64) ^ (uint64_t) r;
-#else
-    uint64_t hm1 = m1 >> 32, hm2 = m2 >> 32;
-    uint64_t lm1 = m1, lm2 = m2;
-    uint64_t v64_128 = hm1 * hm2;
-    uint64_t v32_96 = hm1 * lm2 + lm1 * hm2;
-    uint64_t v1_32 = lm1 * lm2;
-
-    return (v64_128 + (v32_96 >> 32)) ^ ((v32_96 << 32) + v1_32);
-#endif
-}
-
-static inline uint64_t
-key64_hash(uint64_t key, uint32_t seed)
-{
-    return mult_and_mix(key + seed, prime1);
+    /*
+     * This hash function is lightly-tuned for Ruby.  Further tuning
+     * should be possible.  Notes:
+     *
+     * - (n >> 3) alone is great for heap objects and OK for fixnum,
+     *   however symbols perform poorly.
+     * - (n >> (RUBY_SPECIAL_SHIFT+3)) was added to make symbols hash well,
+     *   n.b.: +3 to remove most ID scope, +1 worked well initially, too
+     *   n.b.: +1 (instead of 3) worked well initially, too
+     * - (n << 16) was finally added to avoid losing bits for fixnums
+     * - avoid expensive modulo instructions, it is currently only
+     *   shifts and bitmask operations.
+     */
+    return (n >> (RUBY_SPECIAL_SHIFT + 3) ^ (n << 16)) ^ (n >> 3);
 }
 
 long
 rb_objid_hash(st_index_t index)
 {
-    return (long)key64_hash(rb_hash_start(index), (uint32_t)prime2);
+    st_index_t hnum = rb_num_hash_start(index);
+
+    hnum = rb_hash_start(hnum);
+    hnum = rb_hash_uint(hnum, (st_index_t)rb_any_hash);
+    hnum = rb_hash_end(hnum);
+    return hnum;
 }
 
 static st_index_t
@@ -281,7 +258,7 @@ rb_ident_hash(st_data_t n)
     }
 #endif
 
-    return (st_index_t)key64_hash(rb_hash_start((st_index_t)n), (uint32_t)prime2);
+    return (st_index_t)rb_num_hash_start((st_index_t)n);
 }
 
 static const struct st_hash_type identhash = {
@@ -650,6 +627,7 @@ static VALUE
 rb_hash_s_create(int argc, VALUE *argv, VALUE klass)
 {
     VALUE hash, tmp;
+    int i;
 
     if (argc == 1) {
 	tmp = rb_hash_s_try_convert(Qnil, argv[0]);
@@ -703,7 +681,12 @@ rb_hash_s_create(int argc, VALUE *argv, VALUE klass)
     }
 
     hash = hash_alloc(klass);
-    rb_hash_bulk_insert(argc, argv, hash);
+    if (argc > 0) {
+      RHASH(hash)->ntbl = st_init_table_with_size(&objhash, argc / 2);
+    }
+    for (i=0; i<argc; i+=2) {
+      rb_hash_aset(hash, argv[i], argv[i + 1]);
+    }
 
     return hash;
 }

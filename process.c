@@ -4482,41 +4482,53 @@ rb_f_system(int argc, VALUE *argv)
     waitpid_state_init(w, 0, 0);
     eargp->waitpid_state = w;
     pid = rb_execarg_spawn(execarg_obj, 0, 0);
+    fprintf(stderr, "PID from rb_execarg_spawn: %d\n", (int)pid);
     exec_errnum = pid < 0 ? errno : 0;
 
 #if defined(HAVE_WORKING_FORK) || defined(HAVE_SPAWNV)
     if (w->pid > 0) {
         /* `pid' (not w->pid) may be < 0 here if execve failed in child */
         if (WAITPID_USE_SIGCHLD) {
+            fprintf(stderr, "system: set up waipid_cleanup\n");
             rb_ensure(waitpid_sleep, (VALUE)w, waitpid_cleanup, (VALUE)w);
         }
         else {
+            fprintf(stderr, "system: set up waitpid w/ no SIGCHLD\n");
             waitpid_no_SIGCHLD(w);
         }
+        fprintf(stderr, "system: status set: %d\n", (int)w->status);
         rb_last_status_set(w->status, w->ret);
     }
 #endif
     if (w->pid < 0 /* fork failure */ || pid < 0 /* exec failure */) {
+        fprintf(stderr, "Fork or exec failure...\n");
         if (eargp->exception) {
             int err = exec_errnum ? exec_errnum : w->errnum;
             VALUE command = eargp->invoke.sh.shell_script;
+            fprintf(stderr, "With exception...\n");
             RB_GC_GUARD(execarg_obj);
             rb_syserr_fail_str(err, command);
         }
         else {
+            fprintf(stderr, "With no exception, returning nil.\n");
             return Qnil;
         }
     }
-    if (w->status == EXIT_SUCCESS) return Qtrue;
+    if (w->status == EXIT_SUCCESS) {
+      fprintf(stderr, "EXIT_SUCCESS, returning true.\n");
+      return Qtrue;
+    }
     if (eargp->exception) {
         VALUE command = eargp->invoke.sh.shell_script;
         VALUE str = rb_str_new_cstr("Command failed with");
         rb_str_cat_cstr(pst_message_status(str, w->status), ": ");
         rb_str_append(str, command);
+        fprintf(stderr, "Command failed with... (%d).\n", w->status);
         RB_GC_GUARD(execarg_obj);
         rb_exc_raise(rb_exc_new_str(rb_eRuntimeError, str));
     }
     else {
+        fprintf(stderr, "system: no exception but bad status, returning false.\n");
         return Qfalse;
     }
 }

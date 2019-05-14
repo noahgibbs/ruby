@@ -4316,7 +4316,9 @@ rb_spawn_process(struct rb_execarg *eargp, char *errmsg, size_t errmsg_buflen)
 # endif
 #endif
 
+    fprintf(stderr, "rb_spawn_process: use_shell: %d, ...\n", (int)eargp->use_shell);
 #if defined HAVE_WORKING_FORK && !USE_SPAWNV
+    fprintf(stderr, "rb_spawn_process: HAVE_WORKING_FORK && !USE_SPAWNV\n");
     pid = fork_check_err(0, rb_exec_atfork, eargp, eargp->redirect_fds,
                          errmsg, errmsg_buflen, eargp);
 #else
@@ -4487,9 +4489,10 @@ rb_f_system(int argc, VALUE *argv)
 
 #if defined(HAVE_WORKING_FORK) || defined(HAVE_SPAWNV)
     if (w->pid > 0) {
+        fprintf(stderr, "Before waitpid, status = %d, exec_errnum = %d\n", (int)w->status, (int) exec_errnum);
         /* `pid' (not w->pid) may be < 0 here if execve failed in child */
         if (WAITPID_USE_SIGCHLD) {
-            fprintf(stderr, "system: set up waipid_cleanup\n");
+            fprintf(stderr, "system: set up waitpid_cleanup\n");
             rb_ensure(waitpid_sleep, (VALUE)w, waitpid_cleanup, (VALUE)w);
         }
         else {

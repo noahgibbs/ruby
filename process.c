@@ -3731,7 +3731,7 @@ recv_child_error(int fd, int *errp, char *errmsg, size_t errmsg_buflen)
         }
     }
     close(fd);
-    fprintf(stderr, "recv_child_error: %d / %s\n", err, errmsg == 0 ? "NULL" : errmsg);
+    fprintf(stderr, "recv_child_error: %d / %d / %s\n", err, (int)size, errmsg == 0 ? "NULL" : errmsg);
 
     return size != 0;
 }

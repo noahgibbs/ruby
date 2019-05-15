@@ -522,6 +522,7 @@ void
 rb_last_status_set(int status, rb_pid_t pid)
 {
     rb_thread_t *th = GET_THREAD();
+    fprintf(stderr, "rb_last_status_set: %d / pid: %d\n", status, (int)pid);
     th->last_status = rb_obj_alloc(rb_cProcessStatus);
     rb_ivar_set(th->last_status, id_status, INT2FIX(status));
     rb_ivar_set(th->last_status, id_pid, PIDT2NUM(pid));
@@ -3702,6 +3703,7 @@ send_child_error(int fd, char *errmsg, size_t errmsg_buflen)
 {
     int err;
 
+    fprintf(stderr, "send_child_error: %d / %s\n", errno, errmsg == 0 ? "NULL" : errmsg);
     err = errno;
     if (write_retry(fd, &err, sizeof(err)) < 0) err = errno;
     if (errmsg && 0 < errmsg_buflen) {
@@ -3729,6 +3731,8 @@ recv_child_error(int fd, int *errp, char *errmsg, size_t errmsg_buflen)
         }
     }
     close(fd);
+    fprintf(stderr, "recv_child_error: %d / %s\n", err, errmsg == 0 ? "NULL" : errmsg);
+
     return size != 0;
 }
 
@@ -3987,6 +3991,7 @@ fork_check_err(int *status, int (*chfunc)(void*, char *, size_t), void *charg,
     int error_occurred;
     struct waitpid_state *w;
 
+    fprintf(stderr, "fork_check_err start\n");
     w = eargp && eargp->waitpid_state ? eargp->waitpid_state : 0;
 
     if (status) *status = 0;
@@ -3994,19 +3999,25 @@ fork_check_err(int *status, int (*chfunc)(void*, char *, size_t), void *charg,
     if (pipe_nocrash(ep, fds)) return -1;
     pid = retry_fork_async_signal_safe(status, ep, chfunc, charg,
                                        errmsg, errmsg_buflen, w);
-    if (pid < 0)
+    if (pid < 0) {
+        fprintf(stderr, "fork_check_err: pid < 0\n");
         return pid;
+    }
     close(ep[1]);
     error_occurred = recv_child_error(ep[0], &err, errmsg, errmsg_buflen);
+    fprintf(stderr, "After recv_child_error, got %d\n", error_occurred);
     if (error_occurred) {
         if (status) {
+            fprintf(stderr, "Unusual status/error case %d\n", *status);
             VM_ASSERT((w == 0 || w == WAITPID_LOCK_ONLY) &&
                       "only used by extensions");
             rb_protect(proc_syswait, (VALUE)pid, status);
         }
         else if (!w) {
+            fprintf(stderr, "!status and !w, so rb_syswait on pid %d\n", (int)pid);
             rb_syswait(pid);
         }
+        fprintf(stderr, "Setting errno to %d\n", err);
         errno = err;
         return -1;
     }
@@ -4499,7 +4510,7 @@ rb_f_system(int argc, VALUE *argv)
             fprintf(stderr, "system: set up waitpid w/ no SIGCHLD\n");
             waitpid_no_SIGCHLD(w);
         }
-        fprintf(stderr, "system: status set: %d\n", (int)w->status);
+        fprintf(stderr, "system: status set: %d, pid: %d\n", (int)w->status, (int)w->ret);
         rb_last_status_set(w->status, w->ret);
     }
 #endif

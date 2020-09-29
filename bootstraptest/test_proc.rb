@@ -367,8 +367,8 @@ assert_equal 'ok', %q{
 
 assert_equal 'ok', %q{
   class Foo
-    def call_it(&block)
-      p = Proc.new(&block)
+    def call_it
+      p = Proc.new
       p.call
     end
   end

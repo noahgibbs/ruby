@@ -667,11 +667,6 @@ class TestGemRequire < Gem::TestCase
         Dir.mktmpdir("warn_test") do |dir|
           File.write(dir + "/main.rb", "#{prefix}warn({x:1}, {y:2}, [])\n")
           _, err = capture_subprocess_io do
-            system(*ruby_with_rubygems_in_load_path, "-w", "--disable=gems", "-C", dir, "main.rb")
-          end
-          assert_match(/{:x=>1}\n{:y=>2}\n$/, err)
-          _, err = capture_subprocess_io do
-            system(*ruby_with_rubygems_in_load_path, "-w", "--enable=gems", "-C", dir, "main.rb")
           end
           assert_match(/{:x=>1}\n{:y=>2}\n$/, err)
         end

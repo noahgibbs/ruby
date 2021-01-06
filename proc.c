@@ -52,6 +52,7 @@ VALUE rb_cProc;
 static rb_block_call_func bmcall;
 static int method_arity(VALUE);
 static int method_min_max_arity(VALUE, int *max);
+static VALUE proc_binding(VALUE self);
 
 #define attached id__attached__
 
@@ -70,7 +71,7 @@ block_mark(const struct rb_block *block)
 	    RUBY_MARK_MOVABLE_UNLESS_NULL(captured->self);
 	    RUBY_MARK_MOVABLE_UNLESS_NULL((VALUE)captured->code.val);
 	    if (captured->ep && captured->ep[VM_ENV_DATA_INDEX_ENV] != Qundef /* cfunc_proc_t */) {
-                RUBY_MARK_MOVABLE_UNLESS_NULL(VM_ENV_ENVVAL(captured->ep));
+                rb_gc_mark(VM_ENV_ENVVAL(captured->ep));
 	    }
 	}
 	break;
@@ -93,9 +94,6 @@ block_compact(struct rb_block *block)
 	    struct rb_captured_block *captured = &block->as.captured;
             captured->self = rb_gc_location(captured->self);
             captured->code.val = rb_gc_location(captured->code.val);
-            if (captured->ep && captured->ep[VM_ENV_DATA_INDEX_ENV] != Qundef /* cfunc_proc_t */) {
-                UPDATE_REFERENCE(captured->ep[VM_ENV_DATA_INDEX_ENV]);
-            }
 	}
 	break;
       case block_type_symbol:
@@ -427,7 +425,11 @@ get_local_variable_ptr(const rb_env_t **envp, ID lid)
     const rb_env_t *env = *envp;
     do {
 	if (!VM_ENV_FLAGS(env->ep, VM_FRAME_FLAG_CFRAME)) {
-	    const rb_iseq_t *iseq = env->iseq;
+            if (VM_ENV_FLAGS(env->ep, VM_ENV_FLAG_ISOLATED)) {
+                return NULL;
+            }
+
+            const rb_iseq_t *iseq = env->iseq;
 	    unsigned int i;
 
 	    VM_ASSERT(rb_obj_is_iseq((VALUE)iseq));
@@ -819,18 +821,15 @@ proc_new(VALUE klass, int8_t is_lambda, int8_t kernel)
 /*
  *  call-seq:
  *     Proc.new {|...| block } -> a_proc
- *     Proc.new                -> a_proc
  *
- *  Creates a new Proc object, bound to the current context. Proc::new
- *  may be called without a block only within a method with an
- *  attached block, in which case that block is converted to the Proc
- *  object.
+ *  Creates a new Proc object, bound to the current context.
  *
- *     def proc_from
- *       Proc.new
- *     end
- *     proc = proc_from { "hello" }
+ *     proc = Proc.new { "hello" }
  *     proc.call   #=> "hello"
+ *
+ *  Raises ArgumentError if called without a block.
+ *
+ *     Proc.new    #=> ArgumentError
  */
 
 static VALUE
@@ -867,6 +866,34 @@ rb_block_lambda(void)
     return proc_new(rb_cProc, TRUE, FALSE);
 }
 
+static void
+f_lambda_warn(void)
+{
+    rb_control_frame_t *cfp = GET_EC()->cfp;
+    VALUE block_handler = rb_vm_frame_block_handler(cfp);
+
+    if (block_handler != VM_BLOCK_HANDLER_NONE) {
+        switch (vm_block_handler_type(block_handler)) {
+          case block_handler_type_iseq:
+            if (RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp)->ep == VM_BH_TO_ISEQ_BLOCK(block_handler)->ep) {
+                return;
+            }
+            break;
+          case block_handler_type_symbol:
+            return;
+          case block_handler_type_proc:
+            if (rb_proc_lambda_p(VM_BH_TO_PROC(block_handler))) {
+                return;
+            }
+            break;
+          case block_handler_type_ifunc:
+            break;
+        }
+    }
+
+    rb_warn_deprecated("lambda without a literal block", "the proc without lambda");
+}
+
 /*
  * call-seq:
  *   lambda { |...| block }  -> a_proc
@@ -878,19 +905,7 @@ rb_block_lambda(void)
 static VALUE
 f_lambda(VALUE _)
 {
-    VALUE block_handler = rb_vm_frame_block_handler(GET_EC()->cfp);
-
-    if (block_handler != VM_BLOCK_HANDLER_NONE) {
-        switch (vm_block_handler_type(block_handler)) {
-          case block_handler_type_proc:
-          case block_handler_type_symbol:
-          case block_handler_type_ifunc:
-            rb_warn_deprecated("lambda without a literal block", "the proc without lambda");
-          default:
-            break;
-        }
-    }
-
+    f_lambda_warn();
     return rb_block_lambda();
 }
 
@@ -1277,6 +1292,32 @@ rb_proc_get_iseq(VALUE self, int *is_proc)
     return NULL;
 }
 
+/* call-seq:
+ *   prc == other -> true or false
+ *   prc.eql?(other) -> true or false
+ *
+ * Two procs are the same if, and only if, they were created from the same code block.
+ *
+ *   def return_block(&block)
+ *     block
+ *   end
+ *
+ *   def pass_block_twice(&block)
+ *     [return_block(&block), return_block(&block)]
+ *   end
+ *
+ *   block1, block2 = pass_block_twice { puts 'test' }
+ *   # Blocks might be instantiated into Proc's lazily, so they may, or may not,
+ *   # be the same object.
+ *   # But they are produced from the same code block, so they are equal
+ *   block1 == block2
+ *   #=> true
+ *
+ *   # Another Proc will never be equal, even if the code is the "same"
+ *   block1 == proc { puts 'test' }
+ *   #=> false
+ *
+ */
 static VALUE
 proc_eq(VALUE self, VALUE other)
 {
@@ -2780,13 +2821,16 @@ rb_obj_method_arity(VALUE obj, ID id)
 }
 
 VALUE
-rb_callable_receiver(VALUE callable) {
+rb_callable_receiver(VALUE callable)
+{
     if (rb_obj_is_proc(callable)) {
-        VALUE binding = rb_funcall(callable, rb_intern("binding"), 0);
+        VALUE binding = proc_binding(callable);
         return rb_funcall(binding, rb_intern("receiver"), 0);
-    } else if (rb_obj_is_method(callable)) {
+    }
+    else if (rb_obj_is_method(callable)) {
         return method_receiver(callable);
-    } else {
+    }
+    else {
         return Qundef;
     }
 }
@@ -2996,9 +3040,12 @@ method_inspect(VALUE method)
     else {
         mklass = data->klass;
         if (FL_TEST(mklass, FL_SINGLETON)) {
-            do {
-               mklass = RCLASS_SUPER(mklass);
-            } while (RB_TYPE_P(mklass, T_ICLASS));
+            VALUE v = rb_ivar_get(mklass, attached);
+            if (!(RB_TYPE_P(v, T_CLASS) || RB_TYPE_P(v, T_MODULE))) {
+                do {
+                   mklass = RCLASS_SUPER(mklass);
+                } while (RB_TYPE_P(mklass, T_ICLASS));
+            }
         }
 	rb_str_buf_append(str, rb_inspect(mklass));
 	if (defined_class != mklass) {
@@ -3280,6 +3327,8 @@ proc_binding(VALUE self)
 
     GetProcPtr(self, proc);
     block = &proc->block;
+
+    if (proc->is_isolated) rb_raise(rb_eArgError, "Can't create Binding from isolated Proc");
 
   again:
     switch (vm_block_type(block)) {
@@ -3952,7 +4001,7 @@ proc_ruby2_keywords(VALUE procval)
  * == Conversion of other objects to procs
  *
  * Any object that implements the +to_proc+ method can be converted into
- * a proc by the <code>&</code> operator, and therefore con be
+ * a proc by the <code>&</code> operator, and therefore can be
  * consumed by iterators.
  *
 
@@ -4101,6 +4150,7 @@ Init_Proc(void)
     rb_define_method(rb_cProc, "source_location", rb_proc_location, 0);
     rb_define_method(rb_cProc, "parameters", rb_proc_parameters, 0);
     rb_define_method(rb_cProc, "ruby2_keywords", proc_ruby2_keywords, 0);
+    // rb_define_method(rb_cProc, "isolate", rb_proc_isolate, 0); is not accepted.
 
     /* Exceptions */
     rb_eLocalJumpError = rb_define_class("LocalJumpError", rb_eStandardError);

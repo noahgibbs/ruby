@@ -1,6 +1,7 @@
 # frozen_string_literal: false
 require 'test/unit'
 require 'irb/color'
+require 'irb/color_printer'
 require 'rubygems'
 require 'stringio'
 
@@ -34,7 +35,6 @@ module TestIRB
         '"foo#{a} #{b}"' => "#{RED}#{BOLD}\"#{CLEAR}#{RED}foo#{CLEAR}#{RED}\#{#{CLEAR}a#{RED}}#{CLEAR}#{RED} #{CLEAR}#{RED}\#{#{CLEAR}b#{RED}}#{CLEAR}#{RED}#{BOLD}\"#{CLEAR}",
         '/r#{e}g/' => "#{RED}#{BOLD}/#{CLEAR}#{RED}r#{CLEAR}#{RED}\#{#{CLEAR}e#{RED}}#{CLEAR}#{RED}g#{CLEAR}#{RED}#{BOLD}/#{CLEAR}",
         "'a\nb'" => "#{RED}#{BOLD}'#{CLEAR}#{RED}a#{CLEAR}\n#{RED}b#{CLEAR}#{RED}#{BOLD}'#{CLEAR}",
-        "[1]]]\u0013" => "[1]]]^S",
         "%[str]" => "#{RED}#{BOLD}%[#{CLEAR}#{RED}str#{CLEAR}#{RED}#{BOLD}]#{CLEAR}",
         "%Q[str]" => "#{RED}#{BOLD}%Q[#{CLEAR}#{RED}str#{CLEAR}#{RED}#{BOLD}]#{CLEAR}",
         "%q[str]" => "#{RED}#{BOLD}%q[#{CLEAR}#{RED}str#{CLEAR}#{RED}#{BOLD}]#{CLEAR}",
@@ -75,6 +75,31 @@ module TestIRB
           "4.5.6" => "#{MAGENTA}#{BOLD}4.5#{CLEAR}#{RED}#{REVERSE}.6#{CLEAR}",
           "\e[0m\n" => "#{RED}#{REVERSE}^[#{CLEAR}[#{BLUE}#{BOLD}0#{CLEAR}#{RED}#{REVERSE}m#{CLEAR}\n",
           "<<EOS\nhere\nEOS" => "#{RED}<<EOS#{CLEAR}\n#{RED}here#{CLEAR}\n#{RED}EOS#{CLEAR}",
+        })
+      end
+
+      # specific to Ruby 3.0+
+      if Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.0.0')
+        tests.merge!({
+          "[1]]]\u0013" => "[#{BLUE}#{BOLD}1#{CLEAR}]#{RED}#{REVERSE}]#{CLEAR}#{RED}#{REVERSE}]#{CLEAR}#{RED}#{REVERSE}^S#{CLEAR}",
+        })
+        tests.merge!({
+          "def req(true) end" => "#{GREEN}def#{CLEAR} #{BLUE}#{BOLD}req#{CLEAR}(#{RED}#{REVERSE}true#{CLEAR}) #{RED}#{REVERSE}end#{CLEAR}",
+          "nil = 1" => "#{RED}#{REVERSE}nil#{CLEAR} = #{BLUE}#{BOLD}1#{CLEAR}",
+          "alias $x $1" => "#{GREEN}alias#{CLEAR} #{GREEN}#{BOLD}$x#{CLEAR} #{RED}#{REVERSE}$1#{CLEAR}",
+          "class bad; end" => "#{GREEN}class#{CLEAR} #{RED}#{REVERSE}bad#{CLEAR}; #{GREEN}end#{CLEAR}",
+          "def req(@a) end" => "#{GREEN}def#{CLEAR} #{BLUE}#{BOLD}req#{CLEAR}(#{RED}#{REVERSE}@a#{CLEAR}) #{GREEN}end#{CLEAR}",
+        })
+      else
+        tests.merge!({
+          "[1]]]\u0013" => "[1]]]^S",
+          })
+        tests.merge!({
+          "def req(true) end" => "def req(true) end",
+          "nil = 1" => "#{CYAN}#{BOLD}nil#{CLEAR} = #{BLUE}#{BOLD}1#{CLEAR}",
+          "alias $x $1" => "#{GREEN}alias#{CLEAR} #{GREEN}#{BOLD}$x#{CLEAR} $1",
+          "class bad; end" => "#{GREEN}class#{CLEAR} bad; #{GREEN}end#{CLEAR}",
+          "def req(@a) end" => "#{GREEN}def#{CLEAR} #{BLUE}#{BOLD}req#{CLEAR}(@a) #{GREEN}end#{CLEAR}",
         })
       end
 
@@ -128,6 +153,20 @@ module TestIRB
       end
     end
 
+    def test_color_printer
+      unless ripper_lexer_scan_supported?
+        skip 'Ripper::Lexer#scan is supported in Ruby 2.7+'
+      end
+      {
+        1 => "#{BLUE}#{BOLD}1#{CLEAR}",
+        Struct.new('IRBTestColorPrinter', :a).new('test') => "#{GREEN}#<struct Struct::IRBTestColorPrinter#{CLEAR} a#{GREEN}=#{CLEAR}#{RED}#{BOLD}\"#{CLEAR}#{RED}test#{CLEAR}#{RED}#{BOLD}\"#{CLEAR}#{GREEN}>#{CLEAR}",
+        Ripper::Lexer.new('1').scan => "[#{GREEN}#<Ripper::Lexer::Elem:#{CLEAR} on_int@1:0 END token: #{RED}#{BOLD}\"#{CLEAR}#{RED}1#{CLEAR}#{RED}#{BOLD}\"#{CLEAR}#{GREEN}>#{CLEAR}]",
+      }.each do |object, result|
+        actual = with_term { IRB::ColorPrinter.pp(object, '') }
+        assert_equal(result, actual, "Case: IRB::ColorPrinter.pp(#{object.inspect}, '')")
+      end
+    end
+
     def test_inspect_colorable
       {
         1 => true,
@@ -157,6 +196,10 @@ module TestIRB
 
     # `complete: true` is the same as `complete: false` in Ruby 2.6-
     def complete_option_supported?
+      Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('2.7.0')
+    end
+
+    def ripper_lexer_scan_supported?
       Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('2.7.0')
     end
 

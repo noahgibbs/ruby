@@ -74,12 +74,15 @@ require 'psych/class_loader'
 #
 # ==== Reading from a string
 #
-#   Psych.load("--- a")             # => 'a'
-#   Psych.load("---\n - a\n - b")   # => ['a', 'b']
+#   Psych.safe_load("--- a")             # => 'a'
+#   Psych.safe_load("---\n - a\n - b")   # => ['a', 'b']
+#   # From a trusted string:
+#   Psych.load("--- !ruby/range\nbegin: 0\nend: 42\nexcl: false\n") # => 0..42
 #
 # ==== Reading from a file
 #
-#   Psych.load_file("database.yml")
+#   Psych.safe_load_file("data.yml", permitted_classes: [Date])
+#   Psych.load_file("trusted_database.yml")
 #
 # ==== Exception handling
 #
@@ -230,9 +233,9 @@ require 'psych/class_loader'
 
 module Psych
   # The version of libyaml Psych is using
-  LIBYAML_VERSION = Psych.libyaml_version.join '.'
+  LIBYAML_VERSION = Psych.libyaml_version.join('.').freeze
   # Deprecation guard
-  NOT_GIVEN = Object.new
+  NOT_GIVEN = Object.new.freeze
   private_constant :NOT_GIVEN
 
   ###
@@ -276,8 +279,7 @@ module Psych
 
     result = parse(yaml, filename: filename)
     return fallback unless result
-    result = result.to_ruby(symbolize_names: symbolize_names, freeze: freeze) if result
-    result
+    result.to_ruby(symbolize_names: symbolize_names, freeze: freeze)
   end
 
   ###
@@ -571,35 +573,47 @@ module Psych
   # Load the document contained in +filename+.  Returns the yaml contained in
   # +filename+ as a Ruby object, or if the file is empty, it returns
   # the specified +fallback+ return value, which defaults to +false+.
+  #
+  # NOTE: This method *should not* be used to parse untrusted documents, such as
+  # YAML documents that are supplied via user input.  Instead, please use the
+  # safe_load_file method.
   def self.load_file filename, **kwargs
     File.open(filename, 'r:bom|utf-8') { |f|
       self.load f, filename: filename, **kwargs
     }
   end
 
+  ###
+  # Safely loads the document contained in +filename+.  Returns the yaml contained in
+  # +filename+ as a Ruby object, or if the file is empty, it returns
+  # the specified +fallback+ return value, which defaults to +false+.
+  # See safe_load for options.
+  def self.safe_load_file filename, **kwargs
+    File.open(filename, 'r:bom|utf-8') { |f|
+      self.safe_load f, filename: filename, **kwargs
+    }
+  end
+
   # :stopdoc:
-  @domain_types = {}
   def self.add_domain_type domain, type_tag, &block
     key = ['tag', domain, type_tag].join ':'
-    @domain_types[key] = [key, block]
-    @domain_types["tag:#{type_tag}"] = [key, block]
+    domain_types[key] = [key, block]
+    domain_types["tag:#{type_tag}"] = [key, block]
   end
 
   def self.add_builtin_type type_tag, &block
     domain = 'yaml.org,2002'
     key = ['tag', domain, type_tag].join ':'
-    @domain_types[key] = [key, block]
+    domain_types[key] = [key, block]
   end
 
   def self.remove_type type_tag
-    @domain_types.delete type_tag
+    domain_types.delete type_tag
   end
 
-  @load_tags = {}
-  @dump_tags = {}
   def self.add_tag tag, klass
-    @load_tags[tag] = klass.name
-    @dump_tags[klass] = tag
+    load_tags[tag] = klass.name
+    dump_tags[klass] = tag
   end
 
   # Workaround for emulating `warn '...', uplevel: 1` in Ruby 2.4 or lower.
@@ -618,9 +632,32 @@ module Psych
   private_class_method :warn_with_uplevel, :parse_caller
 
   class << self
-    attr_accessor :load_tags
-    attr_accessor :dump_tags
-    attr_accessor :domain_types
+    if defined?(Ractor)
+      require 'forwardable'
+      extend Forwardable
+
+      class Config
+        attr_accessor :load_tags, :dump_tags, :domain_types
+        def initialize
+          @load_tags = {}
+          @dump_tags = {}
+          @domain_types = {}
+        end
+      end
+
+      def config
+        Ractor.current[:PsychConfig] ||= Config.new
+      end
+
+      def_delegators :config, :load_tags, :dump_tags, :domain_types, :load_tags=, :dump_tags=, :domain_types=
+    else
+      attr_accessor :load_tags
+      attr_accessor :dump_tags
+      attr_accessor :domain_types
+    end
   end
+  self.load_tags = {}
+  self.dump_tags = {}
+  self.domain_types = {}
   # :startdoc:
 end

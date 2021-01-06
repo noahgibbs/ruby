@@ -17,7 +17,6 @@ REPOSITORIES = {
   "io-nonblock": 'ruby/io-nonblock',
   "io-wait": 'ruby/io-wait',
   csv: 'ruby/csv',
-  webrick: 'ruby/webrick',
   dbm: 'ruby/dbm',
   gdbm: 'ruby/gdbm',
   etc: 'ruby/etc',
@@ -77,12 +76,18 @@ REPOSITORIES = {
   resolv: "ruby/resolv",
   "resolv-replace": "ruby/resolv-replace",
   time: "ruby/time",
+  pp: "ruby/pp",
+  prettyprint: "ruby/prettyprint",
+  drb: "ruby/drb",
+  pathname: "ruby/pathname",
+  digest: "ruby/digest",
 }
 
 def sync_default_gems(gem)
-  puts "Sync #{REPOSITORIES[gem.to_sym]}"
+  repo = REPOSITORIES[gem.to_sym]
+  puts "Sync #{repo}"
 
-  upstream = File.join("..", "..", REPOSITORIES[gem.to_sym])
+  upstream = File.join("..", "..", repo)
 
   case gem
   when "rubygems"
@@ -104,7 +109,7 @@ def sync_default_gems(gem)
     cp_r("#{upstream}/rdoc.gemspec", "lib/rdoc")
     cp_r("#{upstream}/exe/rdoc", "libexec")
     cp_r("#{upstream}/exe/ri", "libexec")
-    rm_rf(%w[lib/rdoc/markdown.kpeg lib/rdoc/markdown/literals.kpeg lib/rdoc/rd/block_pager.ry lib/rdoc/rd/inline_parser.ry])
+    rm_rf(%w[lib/rdoc/markdown.kpeg lib/rdoc/markdown/literals.kpeg lib/rdoc/rd/block_parser.ry lib/rdoc/rd/inline_parser.ry])
     `git checkout lib/rdoc/.document`
   when "reline"
     rm_rf(%w[lib/reline lib/reline.rb test/reline])
@@ -115,8 +120,10 @@ def sync_default_gems(gem)
     rm_rf(%w[ext/json test/json])
     cp_r("#{upstream}/ext/json/ext", "ext/json")
     cp_r("#{upstream}/tests", "test/json")
+    rm_rf("test/json/lib")
     cp_r("#{upstream}/lib", "ext/json")
     cp_r("#{upstream}/json.gemspec", "ext/json")
+    cp_r("#{upstream}/VERSION", "ext/json")
     rm_rf(%w[ext/json/lib/json/ext ext/json/lib/json/pure.rb ext/json/lib/json/pure])
     `git checkout ext/json/extconf.rb ext/json/parser/prereq.mk ext/json/generator/depend ext/json/parser/depend ext/json/depend`
   when "psych"
@@ -305,8 +312,26 @@ def sync_default_gems(gem)
     cp_r("#{upstream}/test/bigdecimal", "test")
     cp_r("#{upstream}/bigdecimal.gemspec", "ext/bigdecimal")
     `git checkout ext/bigdecimal/depend`
+  when "pathname"
+    rm_rf(%w[ext/pathname test/pathname])
+    cp_r("#{upstream}/ext/pathname", "ext")
+    cp_r("#{upstream}/test/pathname", "test")
+    cp_r("#{upstream}/lib", "ext/pathname")
+    cp_r("#{upstream}/pathname.gemspec", "ext/pathname")
+    `git checkout ext/pathname/depend`
+  when "digest"
+    rm_rf(%w[ext/digest test/digest])
+    cp_r("#{upstream}/ext/digest", "ext")
+    mkdir_p("#{upstream}/ext/digest/lib")
+    cp_r("#{upstream}/lib/digest.rb", "ext/digest/lib/")
+    cp_r("#{upstream}/test/digest", "test")
+    cp_r("#{upstream}/digest.gemspec", "ext/digest")
+    `git checkout ext/digest/depend ext/digest/*/depend`
+  when "set"
+    sync_lib gem, upstream
+    cp_r("#{upstream}/test", ".")
   else
-    sync_lib gem
+    sync_lib gem, upstream
   end
 end
 
@@ -318,14 +343,20 @@ IGNORE_FILE_PATTERN =
   )\z/x
 
 def sync_default_gems_with_commits(gem, ranges, edit: nil)
-  puts "Sync #{REPOSITORIES[gem.to_sym]} with commit history."
+  repo = REPOSITORIES[gem.to_sym]
+  puts "Sync #{repo} with commit history."
 
   IO.popen(%W"git remote") do |f|
     unless f.read.split.include?(gem)
-      `git remote add #{gem} git@github.com:#{REPOSITORIES[gem.to_sym]}.git`
+      `git remote add #{gem} git@github.com:#{repo}.git`
     end
   end
   system(*%W"git fetch --no-tags #{gem}")
+
+  if ranges == true
+    log = IO.popen(%W"git log --fixed-strings --grep=[#{repo}] -n1 --format=%B", &:read)
+    ranges = ["#{log[%r[https://github\.com/#{Regexp.quote(repo)}/commit/(\h+)\s*\Z], 1]}..#{gem}/master"]
+  end
 
   commits = ranges.flat_map do |range|
     unless range.include?("..")
@@ -352,7 +383,7 @@ def sync_default_gems_with_commits(gem, ranges, edit: nil)
   ENV["FILTER_BRANCH_SQUELCH_WARNING"] = "1"
 
   commits.each do |sha, subject|
-    puts "Pick #{sha} from #{REPOSITORIES[gem.to_sym]}."
+    puts "Pick #{sha} from #{repo}."
 
     skipped = false
     result = IO.popen(%W"git cherry-pick #{sha}", &:read)
@@ -397,9 +428,8 @@ def sync_default_gems_with_commits(gem, ranges, edit: nil)
 
     puts "Update commit message: #{sha}"
 
-    prefix = "[#{(REPOSITORIES[gem.to_sym])}]".gsub(/\//, '\/')
-    suffix = "https://github.com/#{(REPOSITORIES[gem.to_sym])}/commit/#{sha[0,10]}"
-    `git filter-branch -f --msg-filter 'sed "1s/^/#{prefix} /" && echo && echo #{suffix}' -- HEAD~1..HEAD`
+    suffix = "https://github.com/#{repo}/commit/#{sha[0,10]}"
+    `git filter-branch -f --msg-filter 'grep "" - | sed "1s|^|[#{repo}] |" && echo && echo #{suffix}' -- HEAD~1..HEAD`
     unless $?.success?
       puts "Failed to modify commit message of #{sha}"
       break
@@ -412,24 +442,24 @@ def sync_default_gems_with_commits(gem, ranges, edit: nil)
   end
 end
 
-def sync_lib(repo)
-  unless File.directory?("../#{repo}")
-    abort %[Expected '../#{repo}' \(#{File.expand_path("../#{repo}")}\) to be a directory, but it wasn't.]
+def sync_lib(repo, upstream = nil)
+  unless upstream and File.directory?(upstream) or File.directory?(upstream = "../#{repo}")
+    abort %[Expected '#{upstream}' \(#{File.expand_path("#{upstream}")}\) to be a directory, but it wasn't.]
   end
   rm_rf(["lib/#{repo}.rb", "lib/#{repo}/*", "test/test_#{repo}.rb"])
-  cp_r(Dir.glob("../#{repo}/lib/*"), "lib")
+  cp_r(Dir.glob("#{upstream}/lib/*"), "lib")
   tests = if File.directory?("test/#{repo}")
             "test/#{repo}"
           else
             "test/test_#{repo}.rb"
           end
-  cp_r("../#{repo}/#{tests}", "test") if File.exist?("../#{repo}/#{tests}")
+  cp_r("#{upstream}/#{tests}", "test") if File.exist?("#{upstream}/#{tests}")
   gemspec = if File.directory?("lib/#{repo}")
               "lib/#{repo}/#{repo}.gemspec"
             else
               "lib/#{repo}.gemspec"
             end
-  cp_r("../#{repo}/#{repo}.gemspec", "#{gemspec}")
+  cp_r("#{upstream}/#{repo}.gemspec", "#{gemspec}")
 end
 
 def update_default_gems(gem)
@@ -498,13 +528,21 @@ when nil, "-h", "--help"
 
   exit
 else
-  if ARGV[0] == "-e"
-    edit = true
-    ARGV.shift
+  while /\A-/ =~ ARGV[0]
+    case ARGV[0]
+    when "-e"
+      edit = true
+      ARGV.shift
+    when "-a"
+      auto = true
+      ARGV.shift
+    end
   end
   gem = ARGV.shift
   if ARGV[0]
     sync_default_gems_with_commits(gem, ARGV, edit: edit)
+  elsif auto
+    sync_default_gems_with_commits(gem, true, edit: edit)
   else
     sync_default_gems(gem)
   end

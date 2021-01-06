@@ -30,9 +30,8 @@ class TestGemExtBuilder < Gem::TestCase
     ENV['DESTDIR'] = 'destination'
     results = []
 
-    Dir.chdir @ext do
-      File.open 'Makefile', 'w' do |io|
-        io.puts <<-MAKEFILE
+    File.open File.join(@ext, 'Makefile'), 'w' do |io|
+      io.puts <<-MAKEFILE
 all:
 \t@#{Gem.ruby} -e "puts %Q{all: \#{ENV['DESTDIR']}}"
 
@@ -41,17 +40,16 @@ clean:
 
 install:
 \t@#{Gem.ruby} -e "puts %Q{install: \#{ENV['DESTDIR']}}"
-        MAKEFILE
-      end
-
-      Gem::Ext::Builder.make @dest_path, results
+      MAKEFILE
     end
+
+    Gem::Ext::Builder.make @dest_path, results, @ext
 
     results = results.join("\n").b
 
-    assert_match %r{"DESTDIR=#{ENV['DESTDIR']}" clean$},   results
-    assert_match %r{"DESTDIR=#{ENV['DESTDIR']}"$},         results
-    assert_match %r{"DESTDIR=#{ENV['DESTDIR']}" install$}, results
+    assert_match %r{DESTDIR\\=#{ENV['DESTDIR']} clean$},   results
+    assert_match %r{DESTDIR\\=#{ENV['DESTDIR']}$},         results
+    assert_match %r{DESTDIR\\=#{ENV['DESTDIR']} install$}, results
 
     if /nmake/ !~ results
       assert_match %r{^clean: destination$},   results
@@ -64,25 +62,23 @@ install:
     ENV['DESTDIR'] = 'destination'
     results = []
 
-    Dir.chdir @ext do
-      File.open 'Makefile', 'w' do |io|
-        io.puts <<-MAKEFILE
+    File.open File.join(@ext, 'Makefile'), 'w' do |io|
+      io.puts <<-MAKEFILE
 all:
 \t@#{Gem.ruby} -e "puts %Q{all: \#{ENV['DESTDIR']}}"
 
 install:
 \t@#{Gem.ruby} -e "puts %Q{install: \#{ENV['DESTDIR']}}"
-        MAKEFILE
-      end
-
-      Gem::Ext::Builder.make @dest_path, results
+      MAKEFILE
     end
+
+    Gem::Ext::Builder.make @dest_path, results, @ext
 
     results = results.join("\n").b
 
-    assert_match %r{"DESTDIR=#{ENV['DESTDIR']}" clean$},   results
-    assert_match %r{"DESTDIR=#{ENV['DESTDIR']}"$},         results
-    assert_match %r{"DESTDIR=#{ENV['DESTDIR']}" install$}, results
+    assert_match %r{DESTDIR\\=#{ENV['DESTDIR']} clean$},   results
+    assert_match %r{DESTDIR\\=#{ENV['DESTDIR']}$},         results
+    assert_match %r{DESTDIR\\=#{ENV['DESTDIR']} install$}, results
   end
 
   def test_build_extensions

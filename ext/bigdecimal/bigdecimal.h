@@ -10,62 +10,46 @@
 #define  RUBY_BIG_DECIMAL_H 1
 
 #define RUBY_NO_OLD_COMPATIBILITY
-
 #include "ruby/ruby.h"
-#include <float.h>
+#include "missing.h"
 
-#ifndef RB_UNUSED_VAR
-# ifdef __GNUC__
-#  define RB_UNUSED_VAR(x) x __attribute__ ((unused))
-# else
-#  define RB_UNUSED_VAR(x) x
-# endif
+#ifdef HAVE_FLOAT_H
+# include <float.h>
 #endif
-
-#ifndef UNREACHABLE
-# define UNREACHABLE		/* unreachable */
-#endif
-
-#undef BDIGIT
-#undef SIZEOF_BDIGITS
-#undef BDIGIT_DBL
-#undef BDIGIT_DBL_SIGNED
-#undef PRI_BDIGIT_PREFIX
-#undef PRI_BDIGIT_DBL_PREFIX
 
 #ifdef HAVE_INT64_T
-# define BDIGIT uint32_t
-# define BDIGIT_DBL uint64_t
-# define BDIGIT_DBL_SIGNED int64_t
-# define SIZEOF_BDIGITS 4
-# define PRI_BDIGIT_PREFIX ""
+# define DECDIG uint32_t
+# define DECDIG_DBL uint64_t
+# define DECDIG_DBL_SIGNED int64_t
+# define SIZEOF_DECDIG 4
+# define PRI_DECDIG_PREFIX ""
 # ifdef PRI_LL_PREFIX
-# define PRI_BDIGIT_DBL_PREFIX PRI_LL_PREFIX
+# define PRI_DECDIG_DBL_PREFIX PRI_LL_PREFIX
 # else
-# define PRI_BDIGIT_DBL_PREFIX "l"
+# define PRI_DECDIG_DBL_PREFIX "l"
 # endif
 #else
-# define BDIGIT uint16_t
-# define BDIGIT_DBL uint32_t
-# define BDIGIT_DBL_SIGNED int32_t
-# define SIZEOF_BDIGITS 2
-# define PRI_BDIGIT_PREFIX "h"
-# define PRI_BDIGIT_DBL_PREFIX ""
+# define DECDIG uint16_t
+# define DECDIG_DBL uint32_t
+# define DECDIG_DBL_SIGNED int32_t
+# define SIZEOF_DECDIG 2
+# define PRI_DECDIG_PREFIX "h"
+# define PRI_DECDIG_DBL_PREFIX ""
 #endif
 
-#define PRIdBDIGIT PRI_BDIGIT_PREFIX"d"
-#define PRIiBDIGIT PRI_BDIGIT_PREFIX"i"
-#define PRIoBDIGIT PRI_BDIGIT_PREFIX"o"
-#define PRIuBDIGIT PRI_BDIGIT_PREFIX"u"
-#define PRIxBDIGIT PRI_BDIGIT_PREFIX"x"
-#define PRIXBDIGIT PRI_BDIGIT_PREFIX"X"
+#define PRIdDECDIG PRI_DECDIG_PREFIX"d"
+#define PRIiDECDIG PRI_DECDIG_PREFIX"i"
+#define PRIoDECDIG PRI_DECDIG_PREFIX"o"
+#define PRIuDECDIG PRI_DECDIG_PREFIX"u"
+#define PRIxDECDIG PRI_DECDIG_PREFIX"x"
+#define PRIXDECDIG PRI_DECDIG_PREFIX"X"
 
-#define PRIdBDIGIT_DBL PRI_BDIGIT_DBL_PREFIX"d"
-#define PRIiBDIGIT_DBL PRI_BDIGIT_DBL_PREFIX"i"
-#define PRIoBDIGIT_DBL PRI_BDIGIT_DBL_PREFIX"o"
-#define PRIuBDIGIT_DBL PRI_BDIGIT_DBL_PREFIX"u"
-#define PRIxBDIGIT_DBL PRI_BDIGIT_DBL_PREFIX"x"
-#define PRIXBDIGIT_DBL PRI_BDIGIT_DBL_PREFIX"X"
+#define PRIdDECDIG_DBL PRI_DECDIG_DBL_PREFIX"d"
+#define PRIiDECDIG_DBL PRI_DECDIG_DBL_PREFIX"i"
+#define PRIoDECDIG_DBL PRI_DECDIG_DBL_PREFIX"o"
+#define PRIuDECDIG_DBL PRI_DECDIG_DBL_PREFIX"u"
+#define PRIxDECDIG_DBL PRI_DECDIG_DBL_PREFIX"x"
+#define PRIXDECDIG_DBL PRI_DECDIG_DBL_PREFIX"X"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -74,108 +58,23 @@ extern "C" {
 #endif
 #endif
 
-#ifndef HAVE_LABS
-static inline long
-labs(long const x)
-{
-    if (x < 0) return -x;
-    return x;
-}
-#endif
-
-#ifndef HAVE_LLABS
-static inline LONG_LONG
-llabs(LONG_LONG const x)
-{
-    if (x < 0) return -x;
-    return x;
-}
-#endif
-
-#ifndef HAVE_FINITE
-static int
-finite(double)
-{
-    return !isnan(n) && !isinf(n);
-}
-#endif
-
-#ifndef isfinite
-# ifndef HAVE_ISFINITE
-#  define HAVE_ISFINITE 1
-#  define isfinite(x) finite(x)
-# endif
-#endif
-
-#ifndef FIX_CONST_VALUE_PTR
-# if defined(__fcc__) || defined(__fcc_version) || \
-    defined(__FCC__) || defined(__FCC_VERSION)
-/* workaround for old version of Fujitsu C Compiler (fcc) */
-#  define FIX_CONST_VALUE_PTR(x) ((const VALUE *)(x))
-# else
-#  define FIX_CONST_VALUE_PTR(x) (x)
-# endif
-#endif
-
-#ifndef HAVE_RB_ARRAY_CONST_PTR
-static inline const VALUE *
-rb_array_const_ptr(VALUE a)
-{
-    return FIX_CONST_VALUE_PTR((RBASIC(a)->flags & RARRAY_EMBED_FLAG) ?
-	RARRAY(a)->as.ary : RARRAY(a)->as.heap.ptr);
-}
-#endif
-
-#ifndef RARRAY_CONST_PTR
-# define RARRAY_CONST_PTR(a) rb_array_const_ptr(a)
-#endif
-
-#ifndef RARRAY_AREF
-# define RARRAY_AREF(a, i) (RARRAY_CONST_PTR(a)[i])
-#endif
-
-#ifndef HAVE_RB_SYM2STR
-static inline VALUE
-rb_sym2str(VALUE sym)
-{
-    return rb_id2str(SYM2ID(sym));
-}
-#endif
-
-#ifndef ST2FIX
-# undef RB_ST2FIX
-# define RB_ST2FIX(h) LONG2FIX((long)(h))
-# define ST2FIX(h) RB_ST2FIX(h)
-#endif
-
-#ifdef vabs
-# undef vabs
-#endif
-#if SIZEOF_VALUE <= SIZEOF_INT
-# define vabs abs
-#elif SIZEOF_VALUE <= SIZEOF_LONG
-# define vabs labs
-#elif SIZEOF_VALUE <= SIZEOF_LONG_LONG
-# define vabs llabs
-#endif
-
 extern VALUE rb_cBigDecimal;
 
-#if 0 || SIZEOF_BDIGITS >= 16
+#if 0 || SIZEOF_DECDIG >= 16
 # define RMPD_COMPONENT_FIGURES 38
-# define RMPD_BASE ((BDIGIT)100000000000000000000000000000000000000U)
-#elif SIZEOF_BDIGITS >= 8
+# define RMPD_BASE ((DECDIG)100000000000000000000000000000000000000U)
+#elif SIZEOF_DECDIG >= 8
 # define RMPD_COMPONENT_FIGURES 19
-# define RMPD_BASE ((BDIGIT)10000000000000000000U)
-#elif SIZEOF_BDIGITS >= 4
+# define RMPD_BASE ((DECDIG)10000000000000000000U)
+#elif SIZEOF_DECDIG >= 4
 # define RMPD_COMPONENT_FIGURES 9
-# define RMPD_BASE ((BDIGIT)1000000000U)
-#elif SIZEOF_BDIGITS >= 2
+# define RMPD_BASE ((DECDIG)1000000000U)
+#elif SIZEOF_DECDIG >= 2
 # define RMPD_COMPONENT_FIGURES 4
-# define RMPD_BASE ((BDIGIT)10000U)
+# define RMPD_BASE ((DECDIG)10000U)
 #else
 # define RMPD_COMPONENT_FIGURES 2
-# define RMPD_BASE ((BDIGIT)100U)
+# define RMPD_BASE ((DECDIG)100U)
 #endif
 
 
@@ -203,7 +102,6 @@ extern VALUE rb_cBigDecimal;
 
 /* Following 2 exceptions can't controlled by user */
 #define VP_EXCEPTION_OP         ((unsigned short)0x0020)
-#define VP_EXCEPTION_MEMORY     ((unsigned short)0x0040)
 
 #define RMPD_EXCEPTION_MODE_DEFAULT 0U
 
@@ -259,7 +157,7 @@ typedef struct {
                      *         -3 : Negative infinite number
                      */
     short  flag;    /* Not used in vp_routines,space for user.  */
-    BDIGIT frac[FLEXIBLE_ARRAY_SIZE]; /* Array of fraction part. */
+    DECDIG frac[FLEXIBLE_ARRAY_SIZE]; /* Array of fraction part. */
 } Real;
 
 /*
@@ -268,12 +166,11 @@ typedef struct {
  *  ------------------
  */
 
-VP_EXPORT  Real *
-VpNewRbClass(size_t mx, char const *str, VALUE klass);
+VP_EXPORT Real *VpNewRbClass(size_t mx, char const *str, VALUE klass, bool strict_p, bool raise_exception);
 
-VP_EXPORT  Real *VpCreateRbObject(size_t mx,const char *str);
+VP_EXPORT Real *VpCreateRbObject(size_t mx, const char *str, bool raise_exception);
 
-static inline BDIGIT
+static inline DECDIG
 rmpd_base_value(void) { return RMPD_BASE; }
 static inline size_t
 rmpd_component_figures(void) { return RMPD_COMPONENT_FIGURES; }
@@ -304,7 +201,7 @@ VP_EXPORT int VpException(unsigned short f,const char *str,int always);
 VP_EXPORT int VpIsNegDoubleZero(double v);
 #endif
 VP_EXPORT size_t VpNumOfChars(Real *vp,const char *pszFmt);
-VP_EXPORT size_t VpInit(BDIGIT BaseVal);
+VP_EXPORT size_t VpInit(DECDIG BaseVal);
 VP_EXPORT void *VpMemAlloc(size_t mb);
 VP_EXPORT void *VpMemRealloc(void *ptr, size_t mb);
 VP_EXPORT void VpFree(Real *pv);

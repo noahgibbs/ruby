@@ -4,8 +4,8 @@
     Copyright (c) 1999-2006 Minero Aoki
 
     This program is free software.
-    You can distribute/modify this program under the terms of
-    the Ruby License. For details, see the file COPYING.
+    You can redistribute this program under the terms of the Ruby's or 2-clause
+    BSD License.  For details, see the COPYING and LICENSE.txt files.
 */
 
 #include "ruby/ruby.h"
@@ -22,7 +22,7 @@ extern size_t onig_region_memsize(const struct re_registers *regs);
 
 #include <stdbool.h>
 
-#define STRSCAN_VERSION "1.0.4"
+#define STRSCAN_VERSION "3.0.0"
 
 /* =======================================================================
                          Data Type Definitions
@@ -176,6 +176,7 @@ strscan_mark(void *ptr)
 {
     struct strscanner *p = ptr;
     rb_gc_mark(p->str);
+    rb_gc_mark(p->regex);
 }
 
 static void
@@ -212,6 +213,7 @@ strscan_s_allocate(VALUE klass)
     CLEAR_MATCH_STATUS(p);
     onig_region_init(&(p->regs));
     p->str = Qnil;
+    p->regex = Qnil;
     return obj;
 }
 
@@ -1168,7 +1170,7 @@ strscan_aref(VALUE self, VALUE idx)
             idx = rb_sym2str(idx);
             /* fall through */
         case T_STRING:
-            if (!p->regex) return Qnil;
+            if (!RTEST(p->regex)) return Qnil;
             RSTRING_GETMEM(idx, name, i);
             i = name_to_backref_number(&(p->regs), p->regex, name, name + i, rb_enc_get(idx));
             break;
@@ -1569,6 +1571,10 @@ strscan_fixed_anchor_p(VALUE self)
 void
 Init_strscan(void)
 {
+#ifdef HAVE_RB_EXT_RACTOR_SAFE
+    rb_ext_ractor_safe(true);
+#endif
+
 #undef rb_intern
     ID id_scanerr = rb_intern("ScanError");
     VALUE tmp;

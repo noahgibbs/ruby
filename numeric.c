@@ -170,13 +170,9 @@ round_half_even(double x, double s)
     return x;
 }
 
-static VALUE fix_uminus(VALUE num);
-static VALUE fix_mul(VALUE x, VALUE y);
 static VALUE fix_lshift(long, unsigned long);
 static VALUE fix_rshift(long, unsigned long);
 static VALUE int_pow(long x, unsigned long y);
-static VALUE int_even_p(VALUE x);
-static int int_round_zero_p(VALUE num, int ndigits);
 static VALUE rb_int_floor(VALUE num, int ndigits);
 static VALUE rb_int_ceil(VALUE num, int ndigits);
 static VALUE flo_to_i(VALUE num);
@@ -467,17 +463,23 @@ rb_num_coerce_cmp(VALUE x, VALUE y, ID func)
     return Qnil;
 }
 
+static VALUE
+ensure_cmp(VALUE c, VALUE x, VALUE y)
+{
+    if (NIL_P(c)) rb_cmperr(x, y);
+    return c;
+}
+
 VALUE
 rb_num_coerce_relop(VALUE x, VALUE y, ID func)
 {
-    VALUE c, x0 = x, y0 = y;
+    VALUE x0 = x, y0 = y;
 
-    if (!do_coerce(&x, &y, FALSE) ||
-	NIL_P(c = rb_funcall(x, func, 1, y))) {
+    if (!do_coerce(&x, &y, FALSE)) {
 	rb_cmperr(x0, y0);
-	return Qnil;		/* not reached */
+	UNREACHABLE_RETURN(Qnil);
     }
-    return c;
+    return ensure_cmp(rb_funcall(x, func, 1, y), x0, y0);
 }
 
 NORETURN(static VALUE num_sadded(VALUE x, VALUE name));
@@ -1028,13 +1030,6 @@ flo_coerce(VALUE x, VALUE y)
     return rb_assoc_new(rb_Float(y), x);
 }
 
-/*
- * call-seq:
- *    -float  ->  float
- *
- * Returns +float+, negated.
- */
-
 VALUE
 rb_float_uminus(VALUE flt)
 {
@@ -1072,8 +1067,8 @@ rb_float_plus(VALUE x, VALUE y)
  * Returns a new Float which is the difference of +float+ and +other+.
  */
 
-static VALUE
-flo_minus(VALUE x, VALUE y)
+VALUE
+rb_float_minus(VALUE x, VALUE y)
 {
     if (RB_TYPE_P(y, T_FIXNUM)) {
 	return DBL2NUM(RFLOAT_VALUE(x) - (double)FIX2LONG(y));
@@ -1518,7 +1513,7 @@ flo_cmp(VALUE x, VALUE y)
 MJIT_FUNC_EXPORTED int
 rb_float_cmp(VALUE x, VALUE y)
 {
-    return NUM2INT(flo_cmp(x, y));
+    return NUM2INT(ensure_cmp(flo_cmp(x, y), x, y));
 }
 
 /*
@@ -1699,51 +1694,11 @@ rb_float_eql(VALUE x, VALUE y)
 
 #define flo_eql rb_float_eql
 
-/*
- * call-seq:
- *    float.to_f  ->  self
- *
- * Since +float+ is already a Float, returns +self+.
- */
-
-static VALUE
-flo_to_f(VALUE num)
-{
-    return num;
-}
-
-/*
- *  call-seq:
- *     float.abs        ->  float
- *     float.magnitude  ->  float
- *
- *  Returns the absolute value of +float+.
- *
- *     (-34.56).abs   #=> 34.56
- *     -34.56.abs     #=> 34.56
- *     34.56.abs      #=> 34.56
- *
- *  Float#magnitude is an alias for Float#abs.
- */
-
 VALUE
 rb_float_abs(VALUE flt)
 {
     double val = fabs(RFLOAT_VALUE(flt));
     return DBL2NUM(val);
-}
-
-/*
- *  call-seq:
- *     float.zero?  ->  true or false
- *
- *  Returns +true+ if +float+ is 0.0.
- */
-
-static VALUE
-flo_zero_p(VALUE num)
-{
-    return flo_iszero(num) ? Qtrue : Qfalse;
 }
 
 /*
@@ -1814,6 +1769,15 @@ rb_flo_is_finite_p(VALUE num)
     return Qtrue;
 }
 
+static VALUE
+flo_nextafter(VALUE flo, double value)
+{
+    double x, y;
+    x = NUM2DBL(flo);
+    y = nextafter(x, value);
+    return DBL2NUM(y);
+}
+
 /*
  *  call-seq:
  *     float.next_float  ->  float
@@ -1869,10 +1833,7 @@ rb_flo_is_finite_p(VALUE num)
 static VALUE
 flo_next_float(VALUE vx)
 {
-    double x, y;
-    x = NUM2DBL(vx);
-    y = nextafter(x, HUGE_VAL);
-    return DBL2NUM(y);
+    return flo_nextafter(vx, HUGE_VAL);
 }
 
 /*
@@ -1920,10 +1881,32 @@ flo_next_float(VALUE vx)
 static VALUE
 flo_prev_float(VALUE vx)
 {
-    double x, y;
-    x = NUM2DBL(vx);
-    y = nextafter(x, -HUGE_VAL);
-    return DBL2NUM(y);
+    return flo_nextafter(vx, -HUGE_VAL);
+}
+
+VALUE
+rb_float_floor(VALUE num, int ndigits)
+{
+    double number, f;
+    number = RFLOAT_VALUE(num);
+    if (number == 0.0) {
+	return ndigits > 0 ? DBL2NUM(number) : INT2FIX(0);
+    }
+    if (ndigits > 0) {
+	int binexp;
+	frexp(number, &binexp);
+	if (float_round_overflow(ndigits, binexp)) return num;
+	if (number > 0.0 && float_round_underflow(ndigits, binexp))
+	    return DBL2NUM(0.0);
+	f = pow(10, ndigits);
+	f = floor(number * f) / f;
+	return DBL2NUM(f);
+    }
+    else {
+	num = dbl2ival(floor(number));
+	if (ndigits < 0) num = rb_int_floor(num, ndigits);
+	return num;
+    }
 }
 
 /*
@@ -1968,31 +1951,11 @@ flo_prev_float(VALUE vx)
 static VALUE
 flo_floor(int argc, VALUE *argv, VALUE num)
 {
-    double number, f;
     int ndigits = 0;
-
     if (rb_check_arity(argc, 0, 1)) {
 	ndigits = NUM2INT(argv[0]);
     }
-    number = RFLOAT_VALUE(num);
-    if (number == 0.0) {
-	return ndigits > 0 ? DBL2NUM(number) : INT2FIX(0);
-    }
-    if (ndigits > 0) {
-	int binexp;
-	frexp(number, &binexp);
-	if (float_round_overflow(ndigits, binexp)) return num;
-	if (number > 0.0 && float_round_underflow(ndigits, binexp))
-	    return DBL2NUM(0.0);
-	f = pow(10, ndigits);
-	f = floor(number * f) / f;
-	return DBL2NUM(f);
-    }
-    else {
-	num = dbl2ival(floor(number));
-	if (ndigits < 0) num = rb_int_floor(num, ndigits);
-	return num;
-    }
+    return rb_float_floor(num, ndigits);
 }
 
 /*
@@ -2689,9 +2652,9 @@ num_step_check_fix_args(int argc, VALUE *to, VALUE *step, VALUE by, int fix_nil,
         if (argc > 1 && NIL_P(*step)) {
             rb_raise(rb_eTypeError, "step must be numeric");
         }
-        if (!allow_zero_step && rb_equal(*step, INT2FIX(0))) {
-            rb_raise(rb_eArgError, "step can't be 0");
-        }
+    }
+    if (!allow_zero_step && rb_equal(*step, INT2FIX(0))) {
+        rb_raise(rb_eArgError, "step can't be 0");
     }
     if (NIL_P(*step)) {
 	*step = INT2FIX(1);
@@ -2794,6 +2757,9 @@ num_step(int argc, VALUE *argv, VALUE from)
         }
         if (NIL_P(step)) {
             step = INT2FIX(1);
+        }
+        else if (rb_equal(step, INT2FIX(0))) {
+            rb_raise(rb_eArgError, "step can't be 0");
         }
         if ((NIL_P(to) || rb_obj_is_kind_of(to, rb_cNumeric)) &&
             rb_obj_is_kind_of(step, rb_cNumeric)) {
@@ -3417,7 +3383,7 @@ int_chr(int argc, VALUE *argv, VALUE num)
 	if (0xff < i) {
 	    enc = rb_default_internal_encoding();
 	    if (!enc) {
-		rb_raise(rb_eRangeError, "%d out of char range", i);
+		rb_raise(rb_eRangeError, "%u out of char range", i);
 	    }
 	    goto decode;
 	}
@@ -3443,15 +3409,6 @@ int_chr(int argc, VALUE *argv, VALUE num)
  * Fixnum
  */
 
-
-/*
- * Document-method: Integer#-@
- * call-seq:
- *    -int  ->  integer
- *
- * Returns +int+, negated.
- */
-
 static VALUE
 fix_uminus(VALUE num)
 {
@@ -3464,10 +3421,10 @@ rb_int_uminus(VALUE num)
     if (FIXNUM_P(num)) {
 	return fix_uminus(num);
     }
-    else if (RB_TYPE_P(num, T_BIGNUM)) {
+    else {
+        assert(RB_TYPE_P(num, T_BIGNUM));
 	return rb_big_uminus(num);
     }
-    return num_funcall0(num, idUMinus);
 }
 
 /*
@@ -4358,29 +4315,14 @@ int_le(VALUE x, VALUE y)
     return Qnil;
 }
 
-/*
- * Document-method: Integer#~
- * call-seq:
- *   ~int  ->  integer
- *
- * One's complement: returns a number where each bit is flipped.
- *
- * Inverts the bits in an Integer. As integers are conceptually of
- * infinite length, the result acts as if it had an infinite number of
- * one bits to the left. In hex representations, this is displayed
- * as two periods to the left of the digits.
- *
- *   sprintf("%X", ~0x1122334455)    #=> "..FEEDDCCBBAA"
- */
-
 static VALUE
 fix_comp(VALUE num)
 {
     return ~num | FIXNUM_FLAG;
 }
 
-static VALUE
-int_comp(VALUE num)
+VALUE
+rb_int_comp(VALUE num)
 {
     if (FIXNUM_P(num)) {
 	return fix_comp(num);
@@ -4877,51 +4819,6 @@ int_size(VALUE num)
     return Qnil;
 }
 
-/*
- *  Document-method: Integer#bit_length
- *  call-seq:
- *     int.bit_length  ->  integer
- *
- *  Returns the number of bits of the value of +int+.
- *
- *  "Number of bits" means the bit position of the highest bit
- *  which is different from the sign bit
- *  (where the least significant bit has bit position 1).
- *  If there is no such bit (zero or minus one), zero is returned.
- *
- *  I.e. this method returns <i>ceil(log2(int < 0 ? -int : int+1))</i>.
- *
- *     (-2**1000-1).bit_length   #=> 1001
- *     (-2**1000).bit_length     #=> 1000
- *     (-2**1000+1).bit_length   #=> 1000
- *     (-2**12-1).bit_length     #=> 13
- *     (-2**12).bit_length       #=> 12
- *     (-2**12+1).bit_length     #=> 12
- *     -0x101.bit_length         #=> 9
- *     -0x100.bit_length         #=> 8
- *     -0xff.bit_length          #=> 8
- *     -2.bit_length             #=> 1
- *     -1.bit_length             #=> 0
- *     0.bit_length              #=> 0
- *     1.bit_length              #=> 1
- *     0xff.bit_length           #=> 8
- *     0x100.bit_length          #=> 9
- *     (2**12-1).bit_length      #=> 12
- *     (2**12).bit_length        #=> 13
- *     (2**12+1).bit_length      #=> 13
- *     (2**1000-1).bit_length    #=> 1000
- *     (2**1000).bit_length      #=> 1001
- *     (2**1000+1).bit_length    #=> 1001
- *
- *  This method can be used to detect overflow in Array#pack as follows:
- *
- *     if n.bit_length < 32
- *       [n].pack("l") # no overflow
- *     else
- *       raise "overflow"
- *     end
- */
-
 static VALUE
 rb_fix_bit_length(VALUE fix)
 {
@@ -5091,7 +4988,7 @@ int_upto(VALUE from, VALUE to)
 	    rb_yield(i);
 	    i = rb_funcall(i, '+', 1, INT2FIX(1));
 	}
-	if (NIL_P(c)) rb_cmperr(i, to);
+	ensure_cmp(c, i, to);
     }
     return from;
 }
@@ -5536,16 +5433,13 @@ rb_int_s_isqrt(VALUE self, VALUE num)
 void
 Init_Numeric(void)
 {
-#undef rb_intern
-#define rb_intern(str) rb_intern_const(str)
-
 #ifdef _UNICOSMP
     /* Turn off floating point exceptions for divide by zero, etc. */
     _set_Creg(0, 0);
 #endif
-    id_coerce = rb_intern("coerce");
-    id_to = rb_intern("to");
-    id_by = rb_intern("by");
+    id_coerce = rb_intern_const("coerce");
+    id_to = rb_intern_const("to");
+    id_by = rb_intern_const("by");
 
     rb_eZeroDivError = rb_define_class("ZeroDivisionError", rb_eStandardError);
     rb_eFloatDomainError = rb_define_class("FloatDomainError", rb_eRangeError);
@@ -5611,7 +5505,6 @@ Init_Numeric(void)
     rb_define_method(rb_cInteger, "round", int_round, -1);
     rb_define_method(rb_cInteger, "<=>", rb_int_cmp, 1);
 
-    rb_define_method(rb_cInteger, "-@", rb_int_uminus, 0);
     rb_define_method(rb_cInteger, "+", rb_int_plus, 1);
     rb_define_method(rb_cInteger, "-", rb_int_minus, 1);
     rb_define_method(rb_cInteger, "*", rb_int_mul, 1);
@@ -5633,7 +5526,6 @@ Init_Numeric(void)
     rb_define_method(rb_cInteger, "<", int_lt, 1);
     rb_define_method(rb_cInteger, "<=", int_le, 1);
 
-    rb_define_method(rb_cInteger, "~", int_comp, 0);
     rb_define_method(rb_cInteger, "&", rb_int_and, 1);
     rb_define_method(rb_cInteger, "|", int_or,  1);
     rb_define_method(rb_cInteger, "^", int_xor, 1);
@@ -5738,9 +5630,8 @@ Init_Numeric(void)
     rb_define_method(rb_cFloat, "to_s", flo_to_s, 0);
     rb_define_alias(rb_cFloat, "inspect", "to_s");
     rb_define_method(rb_cFloat, "coerce", flo_coerce, 1);
-    rb_define_method(rb_cFloat, "-@", rb_float_uminus, 0);
     rb_define_method(rb_cFloat, "+", rb_float_plus, 1);
-    rb_define_method(rb_cFloat, "-", flo_minus, 1);
+    rb_define_method(rb_cFloat, "-", rb_float_minus, 1);
     rb_define_method(rb_cFloat, "*", rb_float_mul, 1);
     rb_define_method(rb_cFloat, "/", rb_float_div, 1);
     rb_define_method(rb_cFloat, "quo", flo_quo, 1);
@@ -5758,10 +5649,6 @@ Init_Numeric(void)
     rb_define_method(rb_cFloat, "<=", flo_le, 1);
     rb_define_method(rb_cFloat, "eql?", flo_eql, 1);
     rb_define_method(rb_cFloat, "hash", flo_hash, 0);
-    rb_define_method(rb_cFloat, "to_f", flo_to_f, 0);
-    rb_define_method(rb_cFloat, "abs", rb_float_abs, 0);
-    rb_define_method(rb_cFloat, "magnitude", rb_float_abs, 0);
-    rb_define_method(rb_cFloat, "zero?", flo_zero_p, 0);
 
     rb_define_method(rb_cFloat, "to_i", flo_to_i, 0);
     rb_define_method(rb_cFloat, "to_int", flo_to_i, 0);
@@ -5793,4 +5680,4 @@ rb_float_new(double d)
     return rb_float_new_inline(d);
 }
 
-#include "integer.rbinc"
+#include "numeric.rbinc"

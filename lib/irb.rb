@@ -400,7 +400,7 @@ module IRB
     irb.run(@CONF)
   end
 
-  # Calls each event hook of <code>IRB.conf[:TA_EXIT]</code> when the current session quits.
+  # Calls each event hook of <code>IRB.conf[:AT_EXIT]</code> when the current session quits.
   def IRB.irb_at_exit
     @CONF[:AT_EXIT].each{|hook| hook.call}
   end
@@ -538,7 +538,24 @@ module IRB
         signal_status(:IN_EVAL) do
           begin
             line.untaint if RUBY_VERSION < '2.7'
-            @context.evaluate(line, line_no, exception: exc)
+            if IRB.conf[:MEASURE] && IRB.conf[:MEASURE_CALLBACKS].empty?
+              IRB.set_measure_callback
+            end
+            if IRB.conf[:MEASURE] && !IRB.conf[:MEASURE_CALLBACKS].empty?
+              result = nil
+              last_proc = proc{ result = @context.evaluate(line, line_no, exception: exc) }
+              IRB.conf[:MEASURE_CALLBACKS].inject(last_proc) { |chain, item|
+                _name, callback, arg = item
+                proc {
+                  callback.(@context, line, line_no, arg, exception: exc) do
+                    chain.call
+                  end
+                }
+              }.call
+              @context.set_last_value(result)
+            else
+              @context.evaluate(line, line_no, exception: exc)
+            end
             if @context.echo?
               if assignment_expression?(line)
                 if @context.echo_on_assignment?
@@ -559,6 +576,29 @@ module IRB
           handle_exception(exc)
         end
       end
+    end
+
+    def convert_invalid_byte_sequence(str)
+      str = str.force_encoding(Encoding::ASCII_8BIT)
+      conv = Encoding::Converter.new(Encoding::ASCII_8BIT, Encoding::UTF_8)
+      dst = String.new
+      begin
+        ret = conv.primitive_convert(str, dst)
+        case ret
+        when :invalid_byte_sequence
+          conf.insert_output(conf.primitive_errinfo[3].dump[1..-2])
+          redo
+        when :undefined_conversion
+          c = conv.primitive_errinfo[3].dup.force_encoding(conv.primitive_errinfo[1])
+          conv.insert_output(c.dump[1..-2])
+          redo
+        when :incomplete_input
+          conv.insert_output(conv.primitive_errinfo[3].dump[1..-2])
+        when :finished
+        end
+        break
+      end while nil
+      dst
     end
 
     def handle_exception(exc)
@@ -604,7 +644,8 @@ module IRB
         end
         puts messages.reverse
       end
-      m = exc.to_s.split(/\n/)
+      converted_exc_s = convert_invalid_byte_sequence(exc.to_s.dup)
+      m = converted_exc_s.split(/\n/)
       print "#{attr[1]}#{exc.class} (#{attr[4]}#{m.shift}#{attr[0, 1]})#{attr[]}\n"
       puts m.map {|s| "#{attr[1]}#{s}#{attr[]}\n"}
       if attr == ATTR_PLAIN
@@ -761,7 +802,7 @@ module IRB
             str = "%s...\e[0m" % lines.first
             multiline_p = false
           else
-            str.gsub!(/(\A.*?\n).*/m, "\\1...")
+            str = str.gsub(/(\A.*?\n).*/m, "\\1...")
           end
         else
           output_width = Reline::Unicode.calculate_width(@context.return_format % str, true)

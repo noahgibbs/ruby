@@ -53,7 +53,7 @@ module EnvUtil
       @original_internal_encoding = Encoding.default_internal
       @original_external_encoding = Encoding.default_external
       @original_verbose = $VERBOSE
-      @original_warning = %i[deprecated experimental].to_h {|i| [i, Warning[i]]}
+      @original_warning = defined?(Warning.[]) ? %i[deprecated experimental].to_h {|i| [i, Warning[i]]} : nil
     end
   end
 
@@ -150,6 +150,7 @@ module EnvUtil
     if RUBYLIB and lib = child_env["RUBYLIB"]
       child_env["RUBYLIB"] = [lib, RUBYLIB].join(File::PATH_SEPARATOR)
     end
+    child_env['ASAN_OPTIONS'] = ENV['ASAN_OPTIONS'] if ENV['ASAN_OPTIONS']
     args = [args] if args.kind_of?(String)
     pid = spawn(child_env, *precommand, rubybin, *args, **opt)
     in_c.close
@@ -210,7 +211,7 @@ module EnvUtil
   ensure
     stderr, $stderr = $stderr, stderr
     $VERBOSE = EnvUtil.original_verbose
-    EnvUtil.original_warning.each {|i, v| Warning[i] = v}
+    EnvUtil.original_warning&.each {|i, v| Warning[i] = v}
   end
   module_function :verbose_warning
 

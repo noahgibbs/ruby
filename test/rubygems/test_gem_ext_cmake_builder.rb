@@ -36,14 +36,11 @@ install (FILES test.txt DESTINATION bin)
 
     output = []
 
-    Dir.chdir @ext do
-      Gem::Ext::CmakeBuilder.build nil, @dest_path, output
-    end
+    Gem::Ext::CmakeBuilder.build nil, @dest_path, output, [], nil, @ext
 
     output = output.join "\n"
 
-    assert_match \
-      %r{^cmake \. -DCMAKE_INSTALL_PREFIX=#{Regexp.escape @dest_path}}, output
+    assert_match %r{^cmake \. -DCMAKE_INSTALL_PREFIX\\=#{Regexp.escape @dest_path}}, output
     assert_match %r{#{Regexp.escape @ext}}, output
     assert_contains_make_command '', output
     assert_contains_make_command 'install', output
@@ -54,19 +51,16 @@ install (FILES test.txt DESTINATION bin)
     output = []
 
     error = assert_raises Gem::InstallError do
-      Dir.chdir @ext do
-        Gem::Ext::CmakeBuilder.build nil, @dest_path, output
-      end
+      Gem::Ext::CmakeBuilder.build nil, @dest_path, output, [], nil, @ext
     end
 
     output = output.join "\n"
 
     shell_error_msg = %r{(CMake Error: .*)}
-    sh_prefix_cmake = "cmake . -DCMAKE_INSTALL_PREFIX="
 
     assert_match 'cmake failed', error.message
 
-    assert_match %r{^#{sh_prefix_cmake}#{Regexp.escape @dest_path}}, output
+    assert_match %r{^cmake . -DCMAKE_INSTALL_PREFIX\\=#{Regexp.escape @dest_path}}, output
     assert_match %r{#{shell_error_msg}}, output
   end
 
@@ -77,9 +71,7 @@ install (FILES test.txt DESTINATION bin)
 
     output = []
 
-    Dir.chdir @ext do
-      Gem::Ext::CmakeBuilder.build nil, @dest_path, output
-    end
+    Gem::Ext::CmakeBuilder.build nil, @dest_path, output, [], nil, @ext
 
     output = output.join "\n"
 

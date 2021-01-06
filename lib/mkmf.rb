@@ -616,7 +616,7 @@ MSG
     MakeMakefile.rm_f "#{CONFTEST}*"
   end
 
-  alias_method :try_header, (config_string('try_header') || :try_cpp)
+  alias try_header try_compile
 
   def cpp_include(header)
     if header
@@ -784,7 +784,7 @@ int main() {printf("%"PRI_CONFTEST_PREFIX"#{neg ? 'd' : 'u'}\\n", conftest_const
     if opt and !opt.empty?
       [[:to_str], [:join, " "], [:to_s]].each do |meth, *args|
         if opt.respond_to?(meth)
-          break opt = opt.send(meth, *args)
+          break opt = opt.__send__(meth, *args)
         end
       end
       opt = "#{opt} #{libs}"
@@ -982,7 +982,7 @@ SRC
       if noun
         [[:to_str], [:join, ","], [:to_s]].each do |meth, *args|
           if noun.respond_to?(meth)
-            break noun = noun.send(meth, *args)
+            break noun = noun.__send__(meth, *args)
           end
         end
         unless noun.empty?
@@ -1931,6 +1931,7 @@ SHELL = /bin/sh
 
 # V=0 quiet, V=1 verbose.  other values don't work.
 V = 0
+V0 = $(V:0=)
 Q1 = $(V:1=)
 Q = $(Q1:0=@)
 ECHO1 = $(V:1=@ #{CONFIG['NULLCMD']})

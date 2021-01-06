@@ -101,7 +101,7 @@ AS_IF([test ! -z "$ac_cv_prog_CC" -a ! -z "$CC" -a "$CC" != "$ac_cv_prog_CC"], [
   AC_MSG_ERROR(cached CC is different -- throw away $cache_file
 (it is also a good idea to do 'make clean' before compiling))
 ])
-AS_CASE(["${build_os}"], [linux*], [
+AS_CASE(["${build_os}"], [linux*|cygwin*], [
     AC_CHECK_TOOLS([CC], [gcc clang cc])
 ], [
     # OpenBSD wants to prefer cc over gcc.
@@ -165,13 +165,6 @@ AS_CASE(["${build_os}"],
 ],
 [aix*], [
     AC_PATH_TOOL([NM], [nm], [/usr/ccs/bin/nm], [/usr/ccs/bin:$PATH])
-],
-[darwin*], [
-    AS_IF([libtool 2>&1 | grep no_warning_for_no_symbols > /dev/null], [
-        ac_cv_prog_ac_ct_RANLIB=:
-        ac_cv_prog_ac_ct_AR='libtool -static'
-        rb_cv_arflags='-no_warning_for_no_symbols -o'
-    ])
 ])
 AS_CASE(["${target_os}"],
 [cygwin*|mingw*], [
@@ -201,8 +194,7 @@ AS_IF([test "${CXX}" = "g++" -a -z "${GXX}"], [
     # AC_PROG_CXX sets $CXX to "g++" when it purposefully finds that there is
     # _no_ g++.  This brain-damaged design must be worked around.  Thankfully,
     # similar thing doesn't happen for AC_PROG_CC.
-    AC_MSG_NOTICE([C++ features disabled due to lack of a C++ compiler.])
-    AS_UNSET(CXX)
+    rb_there_is_in_fact_no_gplusplus_but_autoconf_is_cheating_us=true
 ])
 
 test x"$target_alias" = x &&
@@ -278,13 +270,14 @@ AS_CASE(["$host_os:$build_os"],
     # clang version 1.0 (http://llvm.org/svn/llvm-project/cfe/tags/Apple/clang-23 exported)
     # Apple clang version 2.0 (tags/Apple/clang-137) (based on LLVM 2.9svn)
     # Apple clang version 2.1 (tags/Apple/clang-163.7.1) (based on LLVM 3.0svn)
-    AS_IF([! $CC -E -xc - <<SRC >/dev/null], [
-	@%:@if defined __APPLE_CC__ && defined __clang_major__ && __clang_major__ < 3
-	@%:@error premature clang
-	@%:@endif
-SRC
-	AC_MSG_ERROR([clang version 3.0 or later is required])
-    ])
+    AC_PREPROC_IFELSE(
+	[AC_LANG_PROGRAM([
+	    @%:@if defined __APPLE_CC__ && defined __clang_major__ && __clang_major__ < 3
+	    @%:@error premature clang
+	    @%:@endif
+	])],
+	[],
+	[AC_MSG_ERROR([clang version 3.0 or later is required])])
 ])
 
 AS_CASE(["$target_os"],
@@ -377,9 +370,14 @@ AC_SUBST(CC_VERSION_MESSAGE, $cc_version_message)
 : ${DLDFLAGS="$LDFLAGS"}
 
 RUBY_UNIVERSAL_ARCH
-AS_IF([test "$target_cpu" != "$host_cpu" -a "$GCC" = yes -a "$cross_compiling" = no -a "$universal_binary" = no], [
+AS_IF([test "$target_cpu" != "$host_cpu" -a "$GCC" = yes -a "$cross_compiling" = no -a "${universal_binary:-no}" = no], [
     RUBY_DEFAULT_ARCH("$target_cpu")
 ])
+host_os=$target_os
+host_vendor=$target_vendor
+host_cpu=$target_cpu
+host=$target
+host_alias=$target_alias
 
 AC_CACHE_CHECK([for $AR flags], [rb_cv_arflags], [
     AS_IF([$AR rcD conftest.a > /dev/null 2>&1 && rm conftest.a],
@@ -459,17 +457,12 @@ AC_TRY_COMPILE([
 [
 	AC_MSG_RESULT(yes)
 	target_os=${target_os}-android
-	AC_MSG_CHECKING([for Android API version])
-	AC_TRY_COMPILE([
-		@%:@ifndef __ANDROID_API__
-		@%:@error android
-		@%:@endif
-	], [],
-	[AC_MSG_RESULT(defined by the compiler)],
-	[
-		rb_android_api=`getprop ro.build.version.sdk`
-		AC_MSG_RESULT($rb_android_api)
-		RUBY_APPEND_OPTIONS(CPPFLAGS, -D__ANDROID_API__=$rb_android_api)
+	AS_IF([test "x$cross_compiling" = xno], [
+                AC_MSG_CHECKING([for Android API version])
+                # hacky workaround: https://github.com/termux/termux-packages/issues/6176
+                rb_android_api=`getprop ro.build.version.sdk`
+                AC_MSG_RESULT($rb_android_api)
+                RUBY_APPEND_OPTIONS(CPPFLAGS, -D__ANDROID_API__=$rb_android_api -Wno-macro-redefined)
 	])
 ])
 
@@ -674,14 +667,15 @@ AS_IF([test "$GCC" = yes], [
 				 [disable -D_FORTIFY_SOURCE=2 option, which causes link error on mingw]),
 		  [fortify_source=$enableval])
     AS_IF([test "x$fortify_source" != xno], [
-    RUBY_TRY_CFLAGS(-D_FORTIFY_SOURCE=2, [RUBY_APPEND_OPTION(XCFLAGS, -D_FORTIFY_SOURCE=2)])
+        RUBY_TRY_CFLAGS([$optflags -D_FORTIFY_SOURCE=2], [RUBY_APPEND_OPTION(XCFLAGS, -D_FORTIFY_SOURCE=2)], [],
+                        [@%:@include <stdio.h>])
     ])
 
     : ${MJIT_HEADER_FLAGS='-P -dD'}
 
     # -fstack-protector
     AS_CASE(["$target_os"],
-    [mingw*], [
+    [mingw*|haiku*], [
 	stack_protector=no
     ])
     AS_IF([test -z "${stack_protector+set}"], [
@@ -898,6 +892,12 @@ AS_CASE(["$target_os"],
 dnl Checks for libraries.
 AS_CASE(["$target_os"],[*bsd*|dragonfly*],[],[ac_cv_func_daemon=no])
 
+AS_CASE(["$target_os"], [*android*], [
+	AS_CASE(["$target_cpu"], [arm*], [
+		ac_cv_func___builtin_setjmp=no
+	])
+])
+
 AS_UNSET(ORIG_LIBS)
 POSTLINK=:
 AC_SUBST(POSTLINK)
@@ -1035,6 +1035,8 @@ main()
 		  AC_MSG_RESULT($define_xopen_source)
 		  AS_IF([test x"$define_xopen_source" != xno], [
 		    RUBY_APPEND_OPTIONS(CPPFLAGS, -D_XOPEN_SOURCE=$define_xopen_source)
+		    # _XOPEN_SOURCE should not be defined for C++ on Solaris.
+		    RUBY_APPEND_OPTIONS(CXXFLAGS, -U_XOPEN_SOURCE)
 		  ])
 		])
 		],
@@ -1134,7 +1136,10 @@ main()
 [	LIBS="-lm $LIBS"])
 : ${ORIG_LIBS=$LIBS}
 
-AS_IF([test -n "${CXX}"], [
+AS_IF([test -n "${rb_there_is_in_fact_no_gplusplus_but_autoconf_is_cheating_us}"], [
+    AC_MSG_NOTICE([Test skipped due to lack of a C++ compiler.])
+],
+[test -n "${CXX}"], [
     RUBY_WERROR_FLAG([
         AC_MSG_CHECKING([whether CXXFLAGS is valid])
         AC_LANG_PUSH(C++)
@@ -1204,7 +1209,9 @@ AC_CHECK_HEADERS(syscall.h)
 AC_CHECK_HEADERS(time.h)
 AC_CHECK_HEADERS(ucontext.h)
 AC_CHECK_HEADERS(utime.h)
-AC_CHECK_HEADERS(x86intrin.h)
+AS_CASE("$target_cpu", [x64|x86_64|i[3-6]86*], [
+  AC_CHECK_HEADERS(x86intrin.h)
+])
 
 AC_ARG_WITH([gmp],
   [AS_HELP_STRING([--without-gmp],
@@ -1373,78 +1380,6 @@ RUBY_REPLACE_TYPE(clockid_t, [], CLOCKID, [@%:@ifdef HAVE_TIME_H
 @%:@ifdef HAVE_SYS_TIME_H
 @%:@ include <sys/time.h>
 @%:@endif])
-
-AC_CACHE_CHECK(for prototypes, rb_cv_have_prototypes,
-  [AC_TRY_COMPILE([int foo(int x) { return 0; }], [return foo(10);],
-	rb_cv_have_prototypes=yes,
-	rb_cv_have_prototypes=no)])
-AS_IF([test "$rb_cv_have_prototypes" = yes], [
-  AC_DEFINE(HAVE_PROTOTYPES)
-])
-
-AC_CACHE_CHECK(token paste string, rb_cv_tokenpaste,
-  [AC_TRY_COMPILE([@%:@define paste(a,b) a@%:@@%:@b],
-		  [int xy = 1; return paste(x,y);],
-		  rb_cv_tokenpaste=ansi,
-		  rb_cv_tokenpaste=knr)])
-AS_IF([test "$rb_cv_tokenpaste" = ansi], [
-  AC_DEFINE(TOKEN_PASTE(x,y),[x@%:@@%:@y])
-], [
-  AC_DEFINE(TOKEN_PASTE(x,y),[x/**/y])
-])
-
-AC_CACHE_CHECK(stringization, rb_cv_stringization, [
-  rb_cv_stringization=no
-  for string in "#expr" '"expr"'; do
-    AC_COMPILE_IFELSE([
-      AC_LANG_BOOL_COMPILE_TRY([
-#define STRINGIZE0(expr) $string
-#define STRINGIZE(expr) STRINGIZE0(expr)
-#undef real_test_for_stringization
-#define test_for_stringization -.real_test_for_stringization.-
-const char stringized[[]] = STRINGIZE(test_for_stringization);
-], [sizeof(stringized) == 32])],
-      [rb_cv_stringization="$string"; break],
-      [rb_cv_stringization=no])
-  done]
-)
-AC_DEFINE(STRINGIZE(expr),STRINGIZE0(expr))
-AS_IF([test x"$rb_cv_stringization" != xno -a "$rb_cv_stringization" != "#expr"], [
-  AC_DEFINE_UNQUOTED(STRINGIZE0(expr),$rb_cv_stringization)
-  AC_DEFINE(OLD_FASHIONED_STRINGIZATION,1)
-])
-
-AC_CACHE_CHECK([string literal concatenation],
-  rb_cv_string_literal_concatenation, [
-  AC_COMPILE_IFELSE([
-    AC_LANG_BOOL_COMPILE_TRY([
-const char concatenated_literal[[]] = "literals" "to"
-  "be" "concatenated.";
-], [sizeof(concatenated_literal) == 26])],
-    [rb_cv_string_literal_concatenation=yes],
-    [rb_cv_string_literal_concatenation=no])]
-)
-AS_IF([test "$rb_cv_string_literal_concatenation" = no], [
-  AC_MSG_ERROR([No string literal concatenation])
-])
-
-AC_CACHE_CHECK(for variable length prototypes and stdarg.h, rb_cv_stdarg,
-  [AC_TRY_COMPILE([
-#include <stdarg.h>
-int foo(int x, ...) {
-	va_list va;
-	va_start(va, x);
-	va_arg(va, int);
-	va_arg(va, char *);
-	va_arg(va, double);
-	return 0;
-}
-], [return foo(10, "", 3.14);],
-	rb_cv_stdarg=yes,
-	rb_cv_stdarg=no)])
-AS_IF([test "$rb_cv_stdarg" = yes], [
-  AC_DEFINE(HAVE_STDARG_PROTOTYPES)
-])
 
 # __VA_ARGS__ is also tested in AC_PROG_CC_C99 since autoconf 2.60a (around
 # 2006). The check below is redundant and should always success.  Remain not
@@ -1633,10 +1568,8 @@ RUBY_DECL_ATTRIBUTE([__nonnull__(n)], [RUBY_FUNC_NONNULL(n,x)], [rb_cv_func_nonn
 RUBY_APPEND_OPTION(XCFLAGS, -DRUBY_EXPORT)
 
 AC_ARG_ENABLE(mathn,
-    AS_HELP_STRING([--disable-mathn], [disable canonicalization for mathn]),
-    [mathn=$enableval], [mathn=yes])
-test "x$mathn" = xyes || mathn=
-AC_SUBST(MATHN, $mathn)
+    AS_HELP_STRING([--enable-mathn], [enable canonicalization for mathn]),
+    [AC_MSG_ERROR([mathn support has been dropped])])
 
 AC_CACHE_CHECK(for function name string predefined identifier,
     rb_cv_function_name_string,
@@ -1713,9 +1646,9 @@ RUBY_CHECK_SIZEOF(size_t, [int long void*], [], [@%:@include <sys/types.h>])
 RUBY_CHECK_SIZEOF(ptrdiff_t, size_t, [], [@%:@include <stddef.h>])
 RUBY_CHECK_PRINTF_PREFIX(size_t, z)
 RUBY_CHECK_PRINTF_PREFIX(ptrdiff_t, t)
-AC_STRUCT_ST_BLKSIZE
-AC_STRUCT_ST_BLOCKS
-AC_STRUCT_ST_RDEV
+AC_CHECK_MEMBERS([struct stat.st_blksize])
+AC_CHECK_MEMBERS([struct stat.st_blocks])
+AC_CHECK_MEMBERS([struct stat.st_rdev])
 RUBY_CHECK_SIZEOF([struct stat.st_size], [off_t int long "long long"], [], [@%:@include <sys/stat.h>])
 AS_IF([test "$ac_cv_member_struct_stat_st_blocks" = yes], [
     RUBY_CHECK_SIZEOF([struct stat.st_blocks], [off_t int long "long long"], [], [@%:@include <sys/stat.h>])
@@ -1815,7 +1748,6 @@ AS_IF([test $rb_cv_stack_end_address != no], [
 
 dnl Checks for library functions.
 AC_TYPE_GETGROUPS
-AC_TYPE_SIGNAL
 AS_CASE(["${target_cpu}-${target_os}:${target_archs}"],
 [powerpc-darwin*], [
   AC_LIBSOURCES(alloca.c)
@@ -2513,6 +2445,9 @@ AS_CASE([$rb_cv_coroutine], [yes|''], [
         [*-openbsd*], [
             rb_cv_coroutine=copy
         ],
+        [*-haiku*], [
+            rb_cv_coroutine=copy
+        ],
         [
             rb_cv_coroutine=ucontext
         ]
@@ -2739,9 +2674,7 @@ AS_IF([test "$rb_cv_binary_elf" = yes], [
   AC_CHECK_HEADERS([elf.h elf_abi.h])
   AS_IF([test $ac_cv_header_elf_h = yes -o $ac_cv_header_elf_abi_h = yes], [
     AC_LIBOBJ([addr2line])
-    AS_IF([test "x$compress_debug_sections" = xzlib], [
-      AC_CHECK_LIB([z], [uncompress])
-    ])
+    AC_CHECK_LIB([z], [uncompress])
   ])
 ])
 
@@ -3497,6 +3430,9 @@ AS_CASE(["${enable_dtrace}"],
 ], [
     rb_cv_dtrace_available=no
 ])
+AS_CASE(["$target_os"],[freebsd*],[
+         rb_cv_dtrace_available=no
+	 ])
 AS_IF([test "${enable_dtrace}" = yes], [dnl
     AS_IF([test -z "$DTRACE"], [dnl
 	AC_MSG_ERROR([dtrace(1) is missing])

@@ -102,7 +102,7 @@ end
 # <tt>:verbose</tt> flags to methods in FileUtils.
 #
 module FileUtils
-  VERSION = "1.4.1"
+  VERSION = "1.5.0"
 
   def self.private_module_function(name)   #:nodoc:
     module_function name
@@ -223,8 +223,9 @@ module FileUtils
       until path == stack.last   # dirname("/")=="/", dirname("C:/")=="C:/"
         stack.push path
         path = File.dirname(path)
+        break if File.directory?(path)
       end
-      stack.pop                 # root directory should exist
+      stack.pop if path == stack.last   # root directory should exist
       stack.reverse_each do |dir|
         begin
           fu_mkdir dir, mode
@@ -1622,7 +1623,7 @@ module FileUtils
 
   def fu_output_message(msg)   #:nodoc:
     output = @fileutils_output if defined?(@fileutils_output)
-    output ||= $stderr
+    output ||= $stdout
     if defined?(@fileutils_label)
       msg = @fileutils_label + msg
     end

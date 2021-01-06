@@ -26,7 +26,20 @@ begin
 rescue LoadError
 end
 
-require 'bundler'
+if File.exist?(bundler_gemspec)
+  require_relative '../../bundler/lib/bundler'
+else
+  require 'bundler'
+end
+
+# Enable server plugin needed for bisection
+if ENV["RG_BISECT_SERVER_PLUGIN"]
+  require ENV["RG_BISECT_SERVER_PLUGIN"]
+
+  Minitest.extensions << "server"
+end
+
+ENV["MT_NO_PLUGINS"] = "true"
 
 require 'minitest/autorun'
 
@@ -108,8 +121,6 @@ class Gem::TestCase < Minitest::Test
   attr_accessor :uri # :nodoc:
 
   TEST_PATH = ENV.fetch('RUBYGEMS_TEST_PATH', File.expand_path('../../../test/rubygems', __FILE__))
-
-  SPECIFICATIONS = File.expand_path(File.join(TEST_PATH, "specifications"), __FILE__)
 
   def assert_activate(expected, *specs)
     specs.each do |spec|
@@ -252,16 +263,16 @@ class Gem::TestCase < Minitest::Test
   def assert_contains_make_command(target, output, msg = nil)
     if output.match(/\n/)
       msg = message(msg) do
-        'Expected output containing make command "%s": %s' % [
+        "Expected output containing make command \"%s\", but was \n\nBEGIN_OF_OUTPUT\n%sEND_OF_OUTPUT" % [
           ('%s %s' % [make_command, target]).rstrip,
-          output.inspect
+          output,
         ]
       end
     else
       msg = message(msg) do
         'Expected make command "%s": %s' % [
           ('%s %s' % [make_command, target]).rstrip,
-          output.inspect
+          output,
         ]
       end
     end
@@ -300,6 +311,7 @@ class Gem::TestCase < Minitest::Test
     ENV['XDG_CONFIG_HOME'] = nil
     ENV['XDG_DATA_HOME'] = nil
     ENV['SOURCE_DATE_EPOCH'] = nil
+    ENV['BUNDLER_VERSION'] = nil
     ENV["TMPDIR"] = @tmp
 
     @current_dir = Dir.pwd
@@ -337,6 +349,7 @@ class Gem::TestCase < Minitest::Test
     @git = ENV['GIT'] || (win_platform? ? 'git.exe' : 'git')
 
     Gem.ensure_gem_subdirectories @gemhome
+    Gem.ensure_default_gem_subdirectories @gemhome
 
     @orig_LOAD_PATH = $LOAD_PATH.dup
     $LOAD_PATH.map! do |s|
@@ -362,25 +375,22 @@ class Gem::TestCase < Minitest::Test
     Gem.send :remove_instance_variable, :@ruby_version if
       Gem.instance_variables.include? :@ruby_version
 
-    FileUtils.mkdir_p @gemhome
     FileUtils.mkdir_p @userhome
 
     ENV['GEM_PRIVATE_KEY_PASSPHRASE'] = PRIVATE_KEY_PASSPHRASE
 
-    @default_dir = File.join @tempdir, 'default'
-    @default_spec_dir = File.join @default_dir, "specifications", "default"
     if Gem.java_platform?
       @orig_default_gem_home = RbConfig::CONFIG['default_gem_home']
-      RbConfig::CONFIG['default_gem_home'] = @default_dir
+      RbConfig::CONFIG['default_gem_home'] = @gemhome
     else
-      Gem.instance_variable_set(:@default_dir, @default_dir)
+      Gem.instance_variable_set(:@default_dir, @gemhome)
     end
-    FileUtils.mkdir_p @default_spec_dir
+
+    @orig_bindir = RbConfig::CONFIG["bindir"]
+    RbConfig::CONFIG["bindir"] = File.join @gemhome, "bin"
 
     Gem::Specification.unresolved_deps.clear
     Gem.use_paths(@gemhome)
-
-    Gem::Security.reset
 
     Gem.loaded_specs.clear
     Gem.instance_variable_set(:@activated_gem_paths, 0)
@@ -449,6 +459,8 @@ class Gem::TestCase < Minitest::Test
                          @orig_SYSTEM_WIDE_CONFIG_FILE
 
     Gem.ruby = @orig_ruby if @orig_ruby
+
+    RbConfig::CONFIG['bindir'] = @orig_bindir
 
     if Gem.java_platform?
       RbConfig::CONFIG['default_gem_home'] = @orig_default_gem_home
@@ -743,7 +755,7 @@ class Gem::TestCase < Minitest::Test
 
   def install_specs(*specs)
     specs.each do |spec|
-      Gem::Installer.for_spec(spec).install
+      Gem::Installer.for_spec(spec, :force => true).install
     end
 
     Gem.searcher = nil
@@ -753,19 +765,6 @@ class Gem::TestCase < Minitest::Test
   # Installs the provided default specs including writing the spec file
 
   def install_default_gems(*specs)
-    install_default_specs(*specs)
-
-    specs.each do |spec|
-      File.open spec.loaded_from, 'w' do |io|
-        io.write spec.to_ruby_for_cache
-      end
-    end
-  end
-
-  ##
-  # Install the provided default specs
-
-  def install_default_specs(*specs)
     specs.each do |spec|
       installer = Gem::Installer.for_spec(spec, :install_as_default => true)
       installer.install
@@ -794,7 +793,7 @@ class Gem::TestCase < Minitest::Test
   def new_default_spec(name, version, deps = nil, *files)
     spec = util_spec name, version, deps
 
-    spec.loaded_from = File.join(@default_spec_dir, spec.spec_name)
+    spec.loaded_from = File.join(@gemhome, "specifications", "default", spec.spec_name)
     spec.files = files
 
     lib_dir = File.join(@tempdir, "default_gems", "lib")
@@ -1519,7 +1518,7 @@ Also, a list:
     PRIVATE_KEY = nil
     PUBLIC_KEY  = nil
     PUBLIC_CERT = nil
-  end if defined?(OpenSSL::SSL)
+  end if Gem::HAVE_OPENSSL
 end
 
 require 'rubygems/test_utilities'

@@ -36,6 +36,7 @@
 #include "ruby/encoding.h"
 #include "ruby/st.h"
 #include "ruby/util.h"
+#include "ruby/assert.h"
 #include "builtin.h"
 
 /*!
@@ -48,7 +49,6 @@ VALUE rb_mKernel; /*!< Kernel module */
 VALUE rb_cObject; /*!< Object class */
 VALUE rb_cModule; /*!< Module class */
 VALUE rb_cClass; /*!< Class class */
-VALUE rb_cData; /*!< Data class */
 
 VALUE rb_cNilClass; /*!< NilClass class */
 VALUE rb_cTrueClass; /*!< TrueClass class */
@@ -279,7 +279,7 @@ rb_obj_not_equal(VALUE obj1, VALUE obj2)
  * It returns the \a cl itself if it is neither a singleton class or a module.
  *
  * \param[in] cl a Class object.
- * \return the ancestor class found, or a falsey value if nothing found.
+ * \return the ancestor class found, or Qfalse if nothing found.
  */
 VALUE
 rb_class_real(VALUE cl)
@@ -320,24 +320,12 @@ rb_obj_singleton_class(VALUE obj)
     return rb_singleton_class(obj);
 }
 
-struct st_table *
-rb_obj_iv_index_tbl(const struct RObject *obj)
-{
-    /* This is a function that practically never gets used.  Just to keep
-     * backwards compatibility to ruby 2.x. */
-    return ROBJECT_IV_INDEX_TBL((VALUE)obj);
-}
-
 /*! \private */
 MJIT_FUNC_EXPORTED void
 rb_obj_copy_ivar(VALUE dest, VALUE obj)
 {
-    if (!(RBASIC(dest)->flags & ROBJECT_EMBED) && ROBJECT_IVPTR(dest)) {
-	xfree(ROBJECT_IVPTR(dest));
-	ROBJECT(dest)->as.heap.ivptr = 0;
-	ROBJECT(dest)->as.heap.numiv = 0;
-	ROBJECT(dest)->as.heap.iv_index_tbl = 0;
-    }
+    RUBY_ASSERT(RBASIC(dest)->flags & ROBJECT_EMBED);
+
     if (RBASIC(obj)->flags & ROBJECT_EMBED) {
 	MEMCPY(ROBJECT(dest)->as.ary, ROBJECT(obj)->as.ary, VALUE, ROBJECT_EMBED_LEN_MAX);
 	RBASIC(dest)->flags |= ROBJECT_EMBED;
@@ -1144,7 +1132,7 @@ rb_class_search_ancestor(VALUE cl, VALUE c)
  */
 
 static VALUE
-rb_obj_dummy()
+rb_obj_dummy(void)
 {
     return Qnil;
 }
@@ -1601,7 +1589,7 @@ static VALUE
 rb_obj_match(VALUE obj1, VALUE obj2)
 {
     if (rb_warning_category_enabled_p(RB_WARN_CATEGORY_DEPRECATED)) {
-        rb_warn("deprecated Object#=~ is called on %"PRIsVALUE
+        rb_category_warn(RB_WARN_CATEGORY_DEPRECATED, "deprecated Object#=~ is called on %"PRIsVALUE
                 "; it always returns nil", rb_obj_class(obj1));
     }
     return Qnil;
@@ -2266,37 +2254,42 @@ id_for_attr(VALUE obj, VALUE name)
 
 /*
  *  call-seq:
- *     attr_reader(symbol, ...)  -> nil
- *     attr(symbol, ...)         -> nil
- *     attr_reader(string, ...)  -> nil
- *     attr(string, ...)         -> nil
+ *     attr_reader(symbol, ...)  -> array
+ *     attr(symbol, ...)         -> array
+ *     attr_reader(string, ...)  -> array
+ *     attr(string, ...)         -> array
  *
  *  Creates instance variables and corresponding methods that return the
  *  value of each instance variable. Equivalent to calling
  *  ``<code>attr</code><i>:name</i>'' on each name in turn.
  *  String arguments are converted to symbols.
+ *  Returns an array of defined method names as symbols.
  */
 
 static VALUE
 rb_mod_attr_reader(int argc, VALUE *argv, VALUE klass)
 {
     int i;
+    VALUE names = rb_ary_new2(argc);
 
     for (i=0; i<argc; i++) {
-	rb_attr(klass, id_for_attr(klass, argv[i]), TRUE, FALSE, TRUE);
+	ID id = id_for_attr(klass, argv[i]);
+	rb_attr(klass, id, TRUE, FALSE, TRUE);
+	rb_ary_push(names, ID2SYM(id));
     }
-    return Qnil;
+    return names;
 }
 
 /**
  *  call-seq:
- *    attr(name, ...) -> nil
- *    attr(name, true) -> nil
- *    attr(name, false) -> nil
+ *    attr(name, ...) -> array
+ *    attr(name, true) -> array
+ *    attr(name, false) -> array
  *
  *  The first form is equivalent to #attr_reader.
  *  The second form is equivalent to <code>attr_accessor(name)</code> but deprecated.
  *  The last form is equivalent to <code>attr_reader(name)</code> but deprecated.
+ *  Returns an array of defined method names as symbols.
  *--
  * \private
  * \todo can be static?
@@ -2306,47 +2299,57 @@ VALUE
 rb_mod_attr(int argc, VALUE *argv, VALUE klass)
 {
     if (argc == 2 && (argv[1] == Qtrue || argv[1] == Qfalse)) {
-	rb_warning("optional boolean argument is obsoleted");
-	rb_attr(klass, id_for_attr(klass, argv[0]), 1, RTEST(argv[1]), TRUE);
-	return Qnil;
+	ID id = id_for_attr(klass, argv[0]);
+	VALUE names = rb_ary_new();
+
+	rb_category_warning(RB_WARN_CATEGORY_DEPRECATED, "optional boolean argument is obsoleted");
+	rb_attr(klass, id, 1, RTEST(argv[1]), TRUE);
+	rb_ary_push(names, ID2SYM(id));
+	if (argv[1] == Qtrue) rb_ary_push(names, ID2SYM(rb_id_attrset(id)));
+	return names;
     }
     return rb_mod_attr_reader(argc, argv, klass);
 }
 
 /*
  *  call-seq:
- *      attr_writer(symbol, ...)    -> nil
- *      attr_writer(string, ...)    -> nil
+ *      attr_writer(symbol, ...)    -> array
+ *      attr_writer(string, ...)    -> array
  *
  *  Creates an accessor method to allow assignment to the attribute
  *  <i>symbol</i><code>.id2name</code>.
  *  String arguments are converted to symbols.
+ *  Returns an array of defined method names as symbols.
  */
 
 static VALUE
 rb_mod_attr_writer(int argc, VALUE *argv, VALUE klass)
 {
     int i;
+    VALUE names = rb_ary_new2(argc);
 
     for (i=0; i<argc; i++) {
-	rb_attr(klass, id_for_attr(klass, argv[i]), FALSE, TRUE, TRUE);
+	ID id = id_for_attr(klass, argv[i]);
+	rb_attr(klass, id, FALSE, TRUE, TRUE);
+	rb_ary_push(names, ID2SYM(rb_id_attrset(id)));
     }
-    return Qnil;
+    return names;
 }
 
 /*
  *  call-seq:
- *     attr_accessor(symbol, ...)    -> nil
- *     attr_accessor(string, ...)    -> nil
+ *     attr_accessor(symbol, ...)    -> array
+ *     attr_accessor(string, ...)    -> array
  *
  *  Defines a named attribute for this module, where the name is
  *  <i>symbol.</i><code>id2name</code>, creating an instance variable
  *  (<code>@name</code>) and a corresponding access method to read it.
  *  Also creates a method called <code>name=</code> to set the attribute.
  *  String arguments are converted to symbols.
+ *  Returns an array of defined method names as symbols.
  *
  *     module Mod
- *       attr_accessor(:one, :two)
+ *       attr_accessor(:one, :two) #=> [:one, :one=, :two, :two=]
  *     end
  *     Mod.instance_methods.sort   #=> [:one, :one=, :two, :two=]
  */
@@ -2355,11 +2358,16 @@ static VALUE
 rb_mod_attr_accessor(int argc, VALUE *argv, VALUE klass)
 {
     int i;
+    VALUE names = rb_ary_new2(argc * 2);
 
     for (i=0; i<argc; i++) {
-	rb_attr(klass, id_for_attr(klass, argv[i]), TRUE, TRUE, TRUE);
+	ID id = id_for_attr(klass, argv[i]);
+
+	rb_attr(klass, id, TRUE, TRUE, TRUE);
+	rb_ary_push(names, ID2SYM(id));
+	rb_ary_push(names, ID2SYM(rb_id_attrset(id)));
     }
-    return Qnil;
+    return names;
 }
 
 /*
@@ -3383,8 +3391,9 @@ rb_opts_exception_p(VALUE opts, int default_value)
  *  integer string representation.  If <i>arg</i> is a String,
  *  when <i>base</i> is omitted or equals zero, radix indicators
  *  (<code>0</code>, <code>0b</code>, and <code>0x</code>) are honored.
- *  In any case, strings should be strictly conformed to numeric
- *  representation. This behavior is different from that of
+ *  In any case, strings should consist only of one or more digits, except
+ *  for that a sign, one underscore between two digits, and leading/trailing
+ *  spaces are optional.  This behavior is different from that of
  *  String#to_i.  Non string values will be converted by first
  *  trying <code>to_int</code>, then <code>to_i</code>.
  *
@@ -3398,6 +3407,7 @@ rb_opts_exception_p(VALUE opts, int default_value)
  *     Integer(Time.new)   #=> 1204973019
  *     Integer("0930", 10) #=> 930
  *     Integer("111", 2)   #=> 7
+ *     Integer(" +1_0 ")   #=> 10
  *     Integer(nil)        #=> TypeError: can't convert nil into Integer
  *     Integer("x")        #=> ArgumentError: invalid value for Integer(): "x"
  *
@@ -4487,9 +4497,6 @@ InitVM_Object(void)
     rb_cClass =  rb_define_class("Class",  rb_cModule);
 #endif
 
-#undef rb_intern
-#define rb_intern(str) rb_intern_const(str)
-
     rb_define_private_method(rb_cBasicObject, "initialize", rb_obj_dummy0, 0);
     rb_define_alloc_func(rb_cBasicObject, rb_class_allocate_instance);
     rb_define_method(rb_cBasicObject, "==", rb_obj_equal, 1);
@@ -4653,16 +4660,6 @@ InitVM_Object(void)
     rb_undef_method(rb_cClass, "extend_object");
     rb_undef_method(rb_cClass, "append_features");
     rb_undef_method(rb_cClass, "prepend_features");
-
-    /*
-     * Document-class: Data
-     *
-     * This is a deprecated class, base class for C extensions using
-     * Data_Make_Struct or Data_Wrap_Struct.
-     */
-    rb_cData = rb_define_class("Data", rb_cObject);
-    rb_undef_alloc_func(rb_cData);
-    rb_deprecate_constant(rb_cObject, "Data");
 
     rb_cTrueClass = rb_define_class("TrueClass", rb_cObject);
     rb_cTrueClass_to_s = rb_fstring_enc_lit("true", rb_usascii_encoding());

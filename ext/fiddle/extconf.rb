@@ -137,8 +137,10 @@ else
   have_func('ffi_closure_alloc', ffi_header)
 end
 
-if libffi
-  $defs << "-DHAVE_FFI_PREP_CIF_VAR"
+if libffi_version
+  if (libffi_version <=> [3, 0, 11]) >= 0
+    $defs << "-DHAVE_FFI_PREP_CIF_VAR"
+  end
 else
   have_func('ffi_prep_cif_var', ffi_header)
 end
@@ -172,14 +174,19 @@ types.each do |type, signed|
     if signed
       check_signedness(type.downcase, "stddef.h")
     end
+  else
+    check_signedness(type.downcase, "stddef.h")
   end
+end
+
+if have_header("ruby/memory_view.h")
+  have_type("rb_memory_view_t", ["ruby/memory_view.h"])
 end
 
 if libffi
   $LOCAL_LIBS.prepend("./#{libffi.a} ").strip! # to exts.mk
   $INCFLAGS.gsub!(/-I#{libffi.dir}/, '-I$(LIBFFI_DIR)')
 end
-$INCFLAGS << " -I$(top_srcdir)"
 create_makefile 'fiddle' do |conf|
   if !libffi
     next conf << "LIBFFI_CLEAN = none\n"

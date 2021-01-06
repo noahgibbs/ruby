@@ -291,7 +291,7 @@ module Bundler
         names
       end
 
-    protected
+      protected
 
       def credless_remotes
         remotes.map(&method(:suppress_configured_credentials))
@@ -465,7 +465,7 @@ module Bundler
         Bundler.app_cache
       end
 
-    private
+      private
 
       # Checks if the requested spec exists in the global cache. If it does,
       # we copy it to the download path, and if it does not, we download it.
@@ -487,8 +487,15 @@ module Bundler
           uri = spec.remote.uri
           Bundler.ui.confirm("Fetching #{version_message(spec)}")
           rubygems_local_path = Bundler.rubygems.download_gem(spec, uri, download_path)
+
+          # older rubygems return varying file:// variants depending on version
+          rubygems_local_path = rubygems_local_path.gsub(/\Afile:/, "") unless Bundler.rubygems.provides?(">= 3.2.0.rc.2")
+          rubygems_local_path = rubygems_local_path.gsub(%r{\A//}, "") if Bundler.rubygems.provides?("< 3.1.0")
+
           if rubygems_local_path != local_path
-            FileUtils.mv(rubygems_local_path, local_path)
+            SharedHelpers.filesystem_access(local_path) do
+              FileUtils.mv(rubygems_local_path, local_path)
+            end
           end
           cache_globally(spec, local_path)
         end

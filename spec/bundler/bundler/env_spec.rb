@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-require "openssl"
 require "bundler/settings"
+require "openssl"
 
 RSpec.describe Bundler::Env do
   let(:git_proxy_stub) { Bundler::Source::Git::GitProxy.new(nil, nil, nil) }
@@ -60,7 +60,7 @@ RSpec.describe Bundler::Env do
         end
       end
 
-    private
+      private
 
       def with_clear_paths(env_var, env_value)
         old_env_var = ENV[env_var]

@@ -75,7 +75,7 @@ STATIC_ASSERT(sizeof_long_and_sizeof_bdigit, SIZEOF_BDIGIT % SIZEOF_LONG == 0);
 #else
 #   define HOST_BIGENDIAN_P 0
 #endif
-/* (!LSHIFTABLE(d, n) ? 0 : (n)) is same as n but suppress a warning, C4293, by Visual Studio.  */
+/* (!LSHIFTABLE(d, n) ? 0 : (n)) is the same as n but suppress a warning, C4293, by Visual Studio.  */
 #define LSHIFTABLE(d, n) ((n) < sizeof(d) * CHAR_BIT)
 #define LSHIFTX(d, n) (!LSHIFTABLE(d, n) ? 0 : ((d) << (!LSHIFTABLE(d, n) ? 0 : (n))))
 #define CLEAR_LOWBITS(d, numbits) ((d) & LSHIFTX(~((d)*0), (numbits)))
@@ -2359,9 +2359,9 @@ bary_sparse_p(const BDIGIT *ds, size_t n)
 {
     long c = 0;
 
-    if (          ds[rb_genrand_ulong_limited(n / 2) + n / 4]) c++;
-    if (c <= 1 && ds[rb_genrand_ulong_limited(n / 2) + n / 4]) c++;
-    if (c <= 1 && ds[rb_genrand_ulong_limited(n / 2) + n / 4]) c++;
+    if (          ds[2 * n / 5]) c++;
+    if (c <= 1 && ds[    n / 2]) c++;
+    if (c <= 1 && ds[3 * n / 5]) c++;
 
     return (c <= 1) ? 1 : 0;
 }
@@ -5512,7 +5512,7 @@ rb_big_le(VALUE x, VALUE y)
  *
  *  Returns <code>true</code> only if <i>obj</i> has the same value
  *  as <i>big</i>. Contrast this with Integer#eql?, which requires
- *  <i>obj</i> to be a Integer.
+ *  <i>obj</i> to be an Integer.
  *
  *     68719476736 == 68719476736.0   #=> true
  */
@@ -7136,6 +7136,7 @@ rb_int_powm(int const argc, VALUE * const argv, VALUE const num)
             long const half_val = (long)HALF_LONG_MSB;
             long const mm = FIX2LONG(m);
             if (!mm) rb_num_zerodiv();
+            if (mm == 1) return INT2FIX(0);
             if (mm <= half_val) {
                 return int_pow_tmp1(rb_int_modulo(a, m), b, mm, nega_flg);
             }
@@ -7145,6 +7146,7 @@ rb_int_powm(int const argc, VALUE * const argv, VALUE const num)
         }
         else {
             if (rb_bigzero_p(m)) rb_num_zerodiv();
+	    if (bignorm(m) == INT2FIX(1)) return INT2FIX(0);
             return int_pow_tmp3(rb_int_modulo(a, m), b, m, nega_flg);
         }
     }

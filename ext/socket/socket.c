@@ -393,7 +393,7 @@ sock_connect(VALUE sock, VALUE addr)
     addr = rb_str_new4(addr);
     GetOpenFile(sock, fptr);
     fd = fptr->fd;
-    n = rsock_connect(fd, (struct sockaddr*)RSTRING_PTR(addr), RSTRING_SOCKLEN(addr), 0);
+    n = rsock_connect(fd, (struct sockaddr*)RSTRING_PTR(addr), RSTRING_SOCKLEN(addr), 0, NULL);
     if (n < 0) {
 	rsock_sys_fail_raddrinfo_or_sockaddr("connect(2)", addr, rai);
     }
@@ -1154,7 +1154,7 @@ sock_s_getservbyport(int argc, VALUE *argv, VALUE _)
  * be one of below.  If _reverse_lookup_ is omitted, the default value is +nil+.
  *
  *   +true+, +:hostname+:  hostname is obtained from numeric address using reverse lookup, which may take a time.
- *   +false+, +:numeric+:  hostname is same as numeric address.
+ *   +false+, +:numeric+:  hostname is the same as numeric address.
  *   +nil+:              obey to the current +do_not_reverse_lookup+ flag.
  *
  * If Addrinfo object is preferred, use Addrinfo.getaddrinfo.
@@ -1185,11 +1185,7 @@ sock_s_getaddrinfo(int argc, VALUE *argv, VALUE _)
 	norevlookup = rsock_do_not_reverse_lookup;
     }
 
-#ifdef HAVE_GETADDRINFO_A
-    res = rsock_getaddrinfo_a(host, port, &hints, 0, Qnil);
-#else
     res = rsock_getaddrinfo(host, port, &hints, 0);
-#endif
 
     ret = make_addrinfo(res, norevlookup);
     rb_freeaddrinfo(res);
@@ -1898,6 +1894,8 @@ socket_s_ip_address_list(VALUE self)
 void
 Init_socket(void)
 {
+    rb_ext_ractor_safe(true);
+
     rsock_init_basicsocket();
 
     /*

@@ -19,6 +19,7 @@
 #include "internal/object.h"
 #include "internal/proc.h"
 #include "internal/rational.h"
+#include "internal/re.h"
 #include "ruby/util.h"
 #include "ruby_assert.h"
 #include "symbol.h"
@@ -82,6 +83,22 @@ grep_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, args))
 }
 
 static VALUE
+grep_regexp_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, args))
+{
+    struct MEMO *memo = MEMO_CAST(args);
+    VALUE converted_element, match;
+    ENUM_WANT_SVALUE();
+
+    /* In case element can't be converted to a Symbol or String: not a match (don't raise) */
+    converted_element = SYMBOL_P(i) ? i : rb_check_string_type(i);
+    match = NIL_P(converted_element) ? Qfalse : rb_reg_match_p(memo->v1, i, 0);
+    if (match == memo->u3.value) {
+	rb_ary_push(memo->v2, i);
+    }
+    return Qnil;
+}
+
+static VALUE
 grep_iter_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, args))
 {
     struct MEMO *memo = MEMO_CAST(args);
@@ -91,6 +108,27 @@ grep_iter_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, args))
 	rb_ary_push(memo->v2, enum_yield(argc, i));
     }
     return Qnil;
+}
+
+static VALUE
+enum_grep0(VALUE obj, VALUE pat, VALUE test)
+{
+    VALUE ary = rb_ary_new();
+    struct MEMO *memo = MEMO_NEW(pat, ary, test);
+    rb_block_call_func_t fn;
+    if (rb_block_given_p()) {
+	fn = grep_iter_i;
+    }
+    else if (RB_TYPE_P(pat, T_REGEXP) &&
+      LIKELY(rb_method_basic_definition_p(CLASS_OF(pat), idEqq))) {
+	fn = grep_regexp_i;
+    }
+    else {
+	fn = grep_i;
+    }
+    rb_block_call(obj, id_each, 0, 0, fn, (VALUE)memo);
+
+    return ary;
 }
 
 /*
@@ -114,12 +152,7 @@ grep_iter_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, args))
 static VALUE
 enum_grep(VALUE obj, VALUE pat)
 {
-    VALUE ary = rb_ary_new();
-    struct MEMO *memo = MEMO_NEW(pat, ary, Qtrue);
-
-    rb_block_call(obj, id_each, 0, 0, rb_block_given_p() ? grep_iter_i : grep_i, (VALUE)memo);
-
-    return ary;
+    return enum_grep0(obj, pat, Qtrue);
 }
 
 /*
@@ -140,12 +173,7 @@ enum_grep(VALUE obj, VALUE pat)
 static VALUE
 enum_grep_v(VALUE obj, VALUE pat)
 {
-    VALUE ary = rb_ary_new();
-    struct MEMO *memo = MEMO_NEW(pat, ary, Qfalse);
-
-    rb_block_call(obj, id_each, 0, 0, rb_block_given_p() ? grep_iter_i : grep_i, (VALUE)memo);
-
-    return ary;
+    return enum_grep0(obj, pat, Qfalse);
 }
 
 #define COUNT_BIGNUM IMEMO_FL_USER0
@@ -3854,10 +3882,7 @@ sum_iter_normalize_memo(struct enum_sum_memo *memo)
     memo->v = rb_fix_plus(LONG2FIX(memo->n), memo->v);
     memo->n = 0;
 
-    /* r can be an Integer when mathn is loaded */
     switch (TYPE(memo->r)) {
-      case T_FIXNUM:   memo->v = rb_fix_plus(memo->r, memo->v);      break;
-      case T_BIGNUM:   memo->v = rb_big_plus(memo->r, memo->v);      break;
       case T_RATIONAL: memo->v = rb_rational_plus(memo->r, memo->v); break;
       case T_UNDEF:    break;
       default:         UNREACHABLE; /* or ...? */
@@ -3903,7 +3928,7 @@ sum_iter_Kahan_Babuska(VALUE i, struct enum_sum_memo *memo)
 {
     /*
      * Kahan-Babuska balancing compensated summation algorithm
-     * See http://link.springer.com/article/10.1007/s00607-005-0139-x
+     * See https://link.springer.com/article/10.1007/s00607-005-0139-x
      */
     double x;
 
@@ -4107,13 +4132,7 @@ enum_sum(int argc, VALUE* argv, VALUE obj)
         if (memo.n != 0)
             memo.v = rb_fix_plus(LONG2FIX(memo.n), memo.v);
         if (memo.r != Qundef) {
-            /* r can be an Integer when mathn is loaded */
-            if (FIXNUM_P(memo.r))
-                memo.v = rb_fix_plus(memo.r, memo.v);
-            else if (RB_TYPE_P(memo.r, T_BIGNUM))
-                memo.v = rb_big_plus(memo.r, memo.v);
-            else
-                memo.v = rb_rational_plus(memo.r, memo.v);
+            memo.v = rb_rational_plus(memo.r, memo.v);
         }
         return memo.v;
     }
@@ -4159,22 +4178,183 @@ enum_uniq(VALUE obj)
     return ret;
 }
 
+static VALUE
+compact_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, ary))
+{
+    ENUM_WANT_SVALUE();
+
+    if (!NIL_P(i)) {
+        rb_ary_push(ary, i);
+    }
+    return Qnil;
+}
+
 /*
- *  The Enumerable mixin provides collection classes with several
- *  traversal and searching methods, and with the ability to sort. The
- *  class must provide a method #each, which yields
- *  successive members of the collection. If Enumerable#max, #min, or
- *  #sort is used, the objects in the collection must also implement a
- *  meaningful <code><=></code> operator, as these methods rely on an
- *  ordering between members of the collection.
+ *  call-seq:
+ *     enum.compact -> array
+ *
+ *  Returns an array of all non-+nil+ elements from enumeration.
+ *
+ *      def with_nils
+ *        yield 1
+ *        yield 2
+ *        yield nil
+ *        yield 3
+ *      end
+ *
+ *      to_enum(:with_nils).compact
+ *      # => [1, 2, 3]
+ *
+ *  See also Array#compact.
+ */
+
+static VALUE
+enum_compact(VALUE obj)
+{
+    VALUE ary;
+
+    ary = rb_ary_new();
+    rb_block_call(obj, id_each, 0, 0, compact_i, ary);
+
+    return ary;
+}
+
+
+/*
+ * == What's Here
+ *
+ * \Module \Enumerable provides methods that are useful to a collection class for:
+ * - {Querying}[#module-Enumerable-label-Methods+for+Querying]
+ * - {Fetching}[#module-Enumerable-label-Methods+for+Fetching]
+ * - {Searching}[#module-Enumerable-label-Methods+for+Searching]
+ * - {Sorting}[#module-Enumerable-label-Methods+for+Sorting]
+ * - {Iterating}[#module-Enumerable-label-Methods+for+Iterating]
+ * - {And more....}[#module-Enumerable-label-Other+Methods]
+ *
+ * === Methods for Querying
+ *
+ * These methods return information about the \Enumerable other than the elements themselves:
+ *
+ * #include?, #member?:: Returns +true+ if self == object, +false+ otherwise.
+ * #all?::               Returns +true+ if all elements meet a specified criterion; +false+ otherwise.
+ * #any?::               Returns +true+ if any element meets a specified criterion; +false+ otherwise.
+ * #none?::              Returns +true+ if no element meets a specified criterion; +false+ otherwise.
+ * #one?::               Returns +true+ if exactly one element meets a specified criterion; +false+ otherwise.
+ * #count::              Returns the count of elements,
+ *                       based on an argument or block criterion, if given.
+ * #tally::              Returns a new \Hash containing the counts of occurrences of each element.
+ *
+ * === Methods for Fetching
+ *
+ * These methods return entries from the \Enumerable, without modifying it:
+ *
+ * <i>Leading, trailing, or all elements</i>:
+ * #entries, #to_a:: Returns all elements.
+ * #first::          Returns the first element or leading elements.
+ * #take::           Returns a specified number of leading elements.
+ * #drop::           Returns a specified number of trailing elements.
+ * #take_while::     Returns leading elements as specified by the given block.
+ * #drop_while::     Returns trailing elements as specified by the given block.
+ *
+ * <i>Minimum and maximum value elements</i>:
+ * #min::            Returns the elements whose values are smallest among the elements,
+ *                   as determined by <tt><=></tt> or a given block.
+ * #max::            Returns the elements whose values are largest among the elements,
+ *                   as determined by <tt><=></tt> or a given block.
+ * #minmax::         Returns a 2-element \Array containing the smallest and largest elements.
+ * #min_by::         Returns the smallest element, as determined by the given block.
+ * #max_by::         Returns the largest element, as determined by the given block.
+ * #minmax_by::      Returns the smallest and largest elements, as determined by the given block.
+ *
+ * <i>Groups, slices, and partitions</i>:
+ * #group_by::       Returns a \Hash that partitions the elements into groups.
+ * #partition::      Returns elements partitioned into two new Arrays, as determined by the given block.
+ * #slice_after::    Returns a new \Enumerator whose entries are a partition of +self+,
+                     based either on a given +object+ or a given block.
+ * #slice_before::   Returns a new \Enumerator whose entries are a partition of +self+,
+                     based either on a given +object+ or a given block.
+ * #slice_when::     Returns a new \Enumerator whose entries are a partition of +self+
+                     based on the given block.
+ * #chunk::          Returns elements organized into chunks as specified by the given block.
+ * #chunk_while::    Returns elements organized into chunks as specified by the given block.
+ *
+ * === Methods for Searching and Filtering
+ *
+ * These methods return elements that meet a specified criterion.
+ *
+ * #find, #detect::              Returns an element selected by the block.
+ * #find_all, #filter, #select:: Returns elements selected by the block.
+ * #find_index::                 Returns the index of an element selected by a given object or block.
+ * #reject::                     Returns elements not rejected by the block.
+ * #uniq::                       Returns elements that are not duplicates.
+ *
+ * === Methods for Sorting
+ *
+ * These methods return elements in sorted order.
+ *
+ * #sort::    Returns the elements, sorted by <tt><=></tt> or the given block.
+ * #sort_by:: Returns the elements, sorted by the given block.
+ *
+ * === Methods for Iterating
+ *
+ * #each_entry::       Calls the block with each successive element
+ *                     (slightly different from #each).
+ * #each_with_index::  Calls the block with each successive element and its index.
+ * #each_with_object:: Calls the block with each successive element and a given object.
+ * #each_slice::       Calls the block with successive non-overlapping slices.
+ * #each_cons::        Calls the block with successive overlapping slices.
+ *                     (different from #each_slice).
+ * #reverse_each::     Calls the block with each successive element, in reverse order.
+ *
+ * === Other Methods
+ *
+ * #map, #collect::             Returns objects returned by the block.
+ * #filter_map::                Returns truthy objects returned by the block.
+ * #flat_map, #collect_concat:: Returns flattened objects returned by the block.
+ * #grep::                      Returns elements selected by a given object
+ *                              or objects returned by a given block.
+ * #grep_v::                    Returns elements selected by a given object
+ *                              or objects returned by a given block.
+ * #reduce, #inject::           Returns the object formed by combining all elements.
+ * #sum::                       Returns the sum of the elements, using method +++.
+ * #zip::                       Combines each element with elements from other enumerables;
+ *                              returns the n-tuples or calls the block with each.
+ * #cycle::                     Calls the block with each element, cycling repeatedly.
+ *
+ * == Usage
+ *
+ * To use module \Enumerable in a collection class:
+ * - Include it:
+ *     include Enumerable
+ * - Implement method <tt>#each</tt>
+ *   which must yield successive elements of the collection.
+ *   This method will be called by almost any \Enumerable method.
+ *
+ * == \Enumerable in Ruby Core Classes
+ * Some Ruby classes include \Enumerable:
+ * - Array
+ * - Dir
+ * - Hash
+ * - IO
+ * - Range
+ * - Set
+ * - Struct
+ * Virtually all methods in \Enumerable call method +#each+ in the including class:
+ * - <tt>Hash#each</tt> yields the next key-value pair as a 2-element \Array.
+ * - <tt>Struct#each</tt> yields the next name-value pair as a 2-element \Array.
+ * - For the other classes above, +#each+ yields the next object from the collection.
+ *
+ * == About the Examples
+ * The example code snippets for the \Enumerable methods:
+ * - Always show the use of one or more \Array-like classes (often \Array itself).
+ * - Sometimes show the use of a \Hash-like class.
+ *   For some methods, though, the usage would not make sense,
+ *   and so it is not shown.  Example: #tally would find exactly one of each \Hash entry.
  */
 
 void
 Init_Enumerable(void)
 {
-#undef rb_intern
-#define rb_intern(str) rb_intern_const(str)
-
     rb_mEnumerable = rb_define_module("Enumerable");
 
     rb_define_method(rb_mEnumerable, "to_a", enum_to_a, -1);
@@ -4235,6 +4415,7 @@ Init_Enumerable(void)
     rb_define_method(rb_mEnumerable, "chunk_while", enum_chunk_while, 0);
     rb_define_method(rb_mEnumerable, "sum", enum_sum, -1);
     rb_define_method(rb_mEnumerable, "uniq", enum_uniq, 0);
+    rb_define_method(rb_mEnumerable, "compact", enum_compact, 0);
 
-    id_next = rb_intern("next");
+    id_next = rb_intern_const("next");
 }

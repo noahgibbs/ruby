@@ -24,14 +24,15 @@ class TestGemCommandsSetupCommand < Gem::TestCase
       lib/rubygems/test_case.rb
       lib/rubygems/ssl_certs/rubygems.org/foo.pem
       bundler/exe/bundle
+      bundler/exe/bundler
       bundler/lib/bundler.rb
       bundler/lib/bundler/b.rb
+      bundler/bin/bundler/man/bundle-b.1
+      bundler/lib/bundler/man/bundle-b.1.ronn
+      bundler/lib/bundler/man/gemfile.5
+      bundler/lib/bundler/man/gemfile.5.ronn
       bundler/lib/bundler/templates/.circleci/config.yml
       bundler/lib/bundler/templates/.travis.yml
-      bundler/man/bundle-b.1
-      bundler/man/bundle-b.1.txt
-      bundler/man/gemfile.5
-      bundler/man/gemfile.5.txt
     ]
 
     create_dummy_files(filelist)
@@ -41,7 +42,7 @@ class TestGemCommandsSetupCommand < Gem::TestCase
     gemspec.name = "bundler"
     gemspec.version = BUNDLER_VERS
     gemspec.bindir = "exe"
-    gemspec.executables = ["bundle"]
+    gemspec.executables = ["bundle", "bundler"]
 
     File.open 'bundler/bundler.gemspec', 'w' do |io|
       io.puts gemspec.to_ruby
@@ -135,6 +136,7 @@ class TestGemCommandsSetupCommand < Gem::TestCase
     exec_line = out.shift until exec_line == "RubyGems installed the following executables:"
     assert_equal "\t#{default_gem_bin_path}", out.shift
     assert_equal "\t#{default_bundle_bin_path}", out.shift
+    assert_equal "\t#{default_bundler_bin_path}", out.shift
   end
 
   def test_env_shebang_flag
@@ -152,27 +154,13 @@ class TestGemCommandsSetupCommand < Gem::TestCase
     bin_env = win_platform? ? "" : %w[/usr/bin/env /bin/env].find {|f| File.executable?(f) } + " "
     assert_match %r{\A#!\s*#{bin_env}#{ruby_exec}}, File.read(default_gem_bin_path)
     assert_match %r{\A#!\s*#{bin_env}#{ruby_exec}}, File.read(default_bundle_bin_path)
+    assert_match %r{\A#!\s*#{bin_env}#{ruby_exec}}, File.read(default_bundler_bin_path)
     assert_match %r{\A#!\s*#{bin_env}#{ruby_exec}}, File.read(gem_bin_path)
   end
 
-  def test_pem_files_in
-    assert_equal %w[rubygems/ssl_certs/rubygems.org/foo.pem],
-                 @cmd.pem_files_in('lib').sort
-  end
-
-  def test_rb_files_in
-    assert_equal %w[rubygems.rb rubygems/test_case.rb],
-                 @cmd.rb_files_in('lib').sort
-  end
-
-  def test_bundler_man1_files_in
-    assert_equal %w[bundle-b.1 bundle-b.1.txt],
-                 @cmd.bundler_man1_files_in('bundler/man').sort
-  end
-
-  def test_bundler_man5_files_in
-    assert_equal %w[gemfile.5 gemfile.5.txt],
-                 @cmd.bundler_man5_files_in('bundler/man').sort
+  def test_files_in
+    assert_equal %w[rubygems.rb rubygems/ssl_certs/rubygems.org/foo.pem rubygems/test_case.rb],
+                 @cmd.files_in('lib').sort
   end
 
   def test_install_lib
@@ -187,21 +175,8 @@ class TestGemCommandsSetupCommand < Gem::TestCase
       assert_path_exists File.join(dir, 'bundler.rb')
       assert_path_exists File.join(dir, 'bundler/b.rb')
 
-      assert_path_exists File.join(dir, 'bundler/templates/.circleci/config.yml')
+      assert_path_exists File.join(dir, 'bundler/templates/.circleci/config.yml') unless RUBY_ENGINE == "truffleruby" # https://github.com/oracle/truffleruby/issues/2116
       assert_path_exists File.join(dir, 'bundler/templates/.travis.yml')
-    end
-  end
-
-  def test_install_man
-    @cmd.extend FileUtils
-
-    Dir.mktmpdir 'man' do |dir|
-      @cmd.install_man dir
-
-      assert_path_exists File.join("#{dir}/man1", 'bundle-b.1')
-      assert_path_exists File.join("#{dir}/man1", 'bundle-b.1.txt')
-      assert_path_exists File.join("#{dir}/man5", 'gemfile.5')
-      assert_path_exists File.join("#{dir}/man5", 'gemfile.5.txt')
     end
   end
 
@@ -297,7 +272,7 @@ class TestGemCommandsSetupCommand < Gem::TestCase
 
     @cmd.remove_old_lib_files lib
 
-    files_that_go.each {|file| refute_path_exists file }
+    files_that_go.each {|file| refute_path_exists(file) unless file == old_bundler_ci && RUBY_ENGINE == "truffleruby" } # https://github.com/oracle/truffleruby/issues/2116
 
     files_that_stay.each {|file| assert_path_exists file }
   end
@@ -307,14 +282,14 @@ class TestGemCommandsSetupCommand < Gem::TestCase
 
     ruby_1             = File.join man, 'man1', 'ruby.1'
     bundle_b_1         = File.join man, 'man1', 'bundle-b.1'
+    bundle_b_1_ronn    = File.join man, 'man1', 'bundle-b.1.ronn'
     bundle_b_1_txt     = File.join man, 'man1', 'bundle-b.1.txt'
-    bundle_old_b_1     = File.join man, 'man1', 'bundle-old_b.1'
-    bundle_old_b_1_txt = File.join man, 'man1', 'bundle-old_b.1.txt'
     gemfile_5          = File.join man, 'man5', 'gemfile.5'
+    gemfile_5_ronn     = File.join man, 'man5', 'gemfile.5.ronn'
     gemfile_5_txt      = File.join man, 'man5', 'gemfile.5.txt'
 
-    files_that_go   = [bundle_old_b_1, bundle_old_b_1_txt]
-    files_that_stay = [ruby_1, bundle_b_1, bundle_b_1_txt, gemfile_5, gemfile_5_txt]
+    files_that_go   = [bundle_b_1, bundle_b_1_txt, bundle_b_1_ronn, gemfile_5, gemfile_5_txt, gemfile_5_ronn]
+    files_that_stay = [ruby_1]
 
     create_dummy_files(files_that_go + files_that_stay)
 
@@ -331,24 +306,22 @@ class TestGemCommandsSetupCommand < Gem::TestCase
 
     @cmd.options[:previous_version] = Gem::Version.new '2.0.2'
 
-    File.open 'History.txt', 'w' do |io|
+    File.open 'CHANGELOG.md', 'w' do |io|
       io.puts <<-HISTORY_TXT
-# coding: UTF-8
+# #{Gem::VERSION} / 2013-03-26
 
-=== #{Gem::VERSION} / 2013-03-26
-
-* Bug fixes:
+## Bug fixes:
   * Fixed release note display for LANG=C when installing rubygems
   * π is tasty
 
-=== 2.0.2 / 2013-03-06
+# 2.0.2 / 2013-03-06
 
-* Bug fixes:
+## Bug fixes:
   * Other bugs fixed
 
-=== 2.0.1 / 2013-03-05
+# 2.0.1 / 2013-03-05
 
-* Bug fixes:
+## Bug fixes:
   * Yet more bugs fixed
       HISTORY_TXT
     end
@@ -358,9 +331,9 @@ class TestGemCommandsSetupCommand < Gem::TestCase
     end
 
     expected = <<-EXPECTED
-=== #{Gem::VERSION} / 2013-03-26
+# #{Gem::VERSION} / 2013-03-26
 
-* Bug fixes:
+## Bug fixes:
   * Fixed release note display for LANG=C when installing rubygems
   * π is tasty
 
@@ -416,5 +389,9 @@ class TestGemCommandsSetupCommand < Gem::TestCase
 
   def default_bundle_bin_path
     File.join @install_dir, 'bin', 'bundle'
+  end
+
+  def default_bundler_bin_path
+    File.join @install_dir, 'bin', 'bundler'
   end
 end unless Gem.java_platform?

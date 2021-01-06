@@ -12,12 +12,21 @@
 #include "ruby/ruby.h"
 #include "ruby/intern.h"
 
+VALUE rb_scheduler_get();
+VALUE rb_scheduler_set(VALUE scheduler);
+
+VALUE rb_scheduler_current();
+VALUE rb_thread_scheduler_current(VALUE thread);
+
 VALUE rb_scheduler_timeout(struct timeval *timeout);
 
 VALUE rb_scheduler_close(VALUE scheduler);
 
 VALUE rb_scheduler_kernel_sleep(VALUE scheduler, VALUE duration);
 VALUE rb_scheduler_kernel_sleepv(VALUE scheduler, int argc, VALUE * argv);
+
+int rb_scheduler_supports_process_wait(VALUE scheduler);
+VALUE rb_scheduler_process_wait(VALUE scheduler, rb_pid_t pid, int flags);
 
 VALUE rb_scheduler_block(VALUE scheduler, VALUE blocker, VALUE timeout);
 VALUE rb_scheduler_unblock(VALUE scheduler, VALUE blocker, VALUE fiber);

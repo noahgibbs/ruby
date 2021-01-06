@@ -95,7 +95,7 @@ module Bundler
         when "minitest"
           templates.merge!(
             "test/minitest/test_helper.rb.tt" => "test/test_helper.rb",
-            "test/minitest/newgem_test.rb.tt" => "test/#{namespaced_path}_test.rb"
+            "test/minitest/test_newgem.rb.tt" => "test/test_#{namespaced_path}.rb"
           )
           config[:test_task] = :test
         when "test-unit"
@@ -192,7 +192,7 @@ module Bundler
       raise GenericSystemCallError.new(e, "There was a conflict while creating the new gem.")
     end
 
-  private
+    private
 
     def resolve_name(name)
       SharedHelpers.pwd.join(name).basename.to_s

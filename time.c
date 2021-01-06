@@ -43,6 +43,8 @@
 #include "ruby/encoding.h"
 #include "timev.h"
 
+#include "builtin.h"
+
 static ID id_submicro, id_nano_num, id_nano_den, id_offset, id_zone;
 static ID id_nanosecond, id_microsecond, id_millisecond, id_nsec, id_usec;
 static ID id_local_to_utc, id_utc_to_local, id_find_timezone;
@@ -2723,40 +2725,12 @@ rb_time_timespec_interval(VALUE num)
     return time_timespec(num, TRUE);
 }
 
-enum {
-    TMOPT_IN,
-    TMOPT_MAX_
-};
-
-static bool
-get_tmopt(VALUE opts, VALUE vals[TMOPT_MAX_])
-{
-    ID ids[TMOPT_MAX_];
-
-    if (NIL_P(opts)) return false;
-    CONST_ID(ids[TMOPT_IN], "in");
-    rb_get_kwargs(opts, ids, 0, TMOPT_MAX_, vals);
-    return true;
-}
-
-/*
- *  call-seq:
- *     Time.now -> time
- *
- *  Creates a new Time object for the current time.
- *  This is same as Time.new without arguments.
- *
- *     Time.now            #=> 2009-06-24 12:39:54 +0900
- */
-
 static VALUE
-time_s_now(int argc, VALUE *argv, VALUE klass)
+time_s_now(rb_execution_context_t *ec, VALUE klass, VALUE zone)
 {
-    VALUE vals[TMOPT_MAX_], opts, t, zone = Qundef;
-    rb_scan_args(argc, argv, ":", &opts);
-    if (get_tmopt(opts, vals)) zone = vals[TMOPT_IN];
+    VALUE t;
     t = rb_class_new_instance(0, NULL, klass);
-    if (zone != Qundef) {
+    if (!NIL_P(zone)) {
         time_zonelocal(t, zone);
     }
     return t;
@@ -2779,70 +2753,16 @@ get_scale(VALUE unit)
     }
 }
 
-/*
- *  call-seq:
- *     Time.at(time) -> time
- *     Time.at(seconds_with_frac) -> time
- *     Time.at(seconds, microseconds_with_frac) -> time
- *     Time.at(seconds, milliseconds, :millisecond) -> time
- *     Time.at(seconds, microseconds, :usec) -> time
- *     Time.at(seconds, microseconds, :microsecond) -> time
- *     Time.at(seconds, nanoseconds, :nsec) -> time
- *     Time.at(seconds, nanoseconds, :nanosecond) -> time
- *     Time.at(time, in: tz) -> time
- *     Time.at(seconds_with_frac, in: tz) -> time
- *     Time.at(seconds, microseconds_with_frac, in: tz) -> time
- *     Time.at(seconds, milliseconds, :millisecond, in: tz) -> time
- *     Time.at(seconds, microseconds, :usec, in: tz) -> time
- *     Time.at(seconds, microseconds, :microsecond, in: tz) -> time
- *     Time.at(seconds, nanoseconds, :nsec, in: tz) -> time
- *     Time.at(seconds, nanoseconds, :nanosecond, in: tz) -> time
- *
- *  Creates a new Time object with the value given by +time+,
- *  the given number of +seconds_with_frac+, or
- *  +seconds+ and +microseconds_with_frac+ since the Epoch.
- *  +seconds_with_frac+ and +microseconds_with_frac+
- *  can be an Integer, Float, Rational, or other Numeric.
- *
- *  If +in+ argument is given, the result is in that timezone or UTC offset, or
- *  if a numeric argument is given, the result is in local time.
- *  The +in+ argument accepts the same types of arguments as +tz+ argument of
- *  Time.new: string, number of seconds, or a timezone object.
- *
- *
- *     Time.at(0)                                #=> 1969-12-31 18:00:00 -0600
- *     Time.at(Time.at(0))                       #=> 1969-12-31 18:00:00 -0600
- *     Time.at(946702800)                        #=> 1999-12-31 23:00:00 -0600
- *     Time.at(-284061600)                       #=> 1960-12-31 00:00:00 -0600
- *     Time.at(946684800.2).usec                 #=> 200000
- *     Time.at(946684800, 123456.789).nsec       #=> 123456789
- *     Time.at(946684800, 123456789, :nsec).nsec #=> 123456789
- *
- *     Time.at(1582721899, in: "+09:00")         #=> 2020-02-26 21:58:19 +0900
- *     Time.at(1582721899, in: "UTC")            #=> 2020-02-26 12:58:19 UTC
- *     Time.at(1582721899, in: "C")              #=> 2020-02-26 13:58:19 +0300
- *     Time.at(1582721899, in: 32400)            #=> 2020-02-26 21:58:19 +0900
- *
- *     require 'tzinfo'
- *     Time.at(1582721899, in: TZInfo::Timezone.get('Europe/Kiev'))
- *                                               #=> 2020-02-26 14:58:19 +0200
- */
-
 static VALUE
-time_s_at(int argc, VALUE *argv, VALUE klass)
+time_s_at(rb_execution_context_t *ec, VALUE klass, VALUE time, VALUE subsec, VALUE unit, VALUE zone, VALUE nosubsec, VALUE nounit)
 {
-    VALUE time, t, unit = Qundef, zone = Qundef, opts;
-    VALUE vals[TMOPT_MAX_];
+    VALUE t;
     wideval_t timew;
 
-    argc = rb_scan_args(argc, argv, "12:", &time, &t, &unit, &opts);
-    if (get_tmopt(opts, vals)) {
-        zone = vals[0];
-    }
-    if (argc >= 2) {
-        int scale = argc == 3 ? get_scale(unit) : 1000000;
+    if (!RTEST(nosubsec)) {
+        int scale = !RTEST(nounit) ? get_scale(unit) : 1000000;
         time = num_exact(time);
-        t = num_exact(t);
+        t = num_exact(subsec);
         timew = wadd(rb_time_magnify(v2w(time)), wmulquoll(v2w(t), TIME_SCALE, scale));
         t = time_new_timew(klass, timew);
     }
@@ -2857,7 +2777,7 @@ time_s_at(int argc, VALUE *argv, VALUE klass)
         timew = rb_time_magnify(v2w(num_exact(time)));
         t = time_new_timew(klass, timew);
     }
-    if (zone != Qundef) {
+    if (!NIL_P(zone)) {
         time_zonelocal(t, zone);
     }
 
@@ -4260,40 +4180,6 @@ time_minus(VALUE time1, VALUE time2)
     return time_add(tobj, time1, time2, -1);
 }
 
-/*
- * call-seq:
- *   time.succ   -> new_time
- *
- * Returns a new Time object, one second later than _time_.
- * Time#succ is obsolete since 1.9.2 for time is not a discrete value.
- *
- *     t = Time.now       #=> 2007-11-19 08:23:57 -0600
- *     t.succ             #=> 2007-11-19 08:23:58 -0600
- *
- * Use instead <code>time + 1</code>
- *
- *     t + 1              #=> 2007-11-19 08:23:58 -0600
- */
-
-VALUE
-rb_time_succ(VALUE time)
-{
-    struct time_object *tobj;
-    struct time_object *tobj2;
-
-    rb_warn("Time#succ is obsolete; use time + 1");
-    GetTimeval(time, tobj);
-    time = time_new_timew(rb_cTime, wadd(tobj->timew, WINT2FIXWV(TIME_SCALE)));
-    GetTimeval(time, tobj2);
-    TZMODE_COPY(tobj2, tobj);
-    if (TZMODE_LOCALTIME_P(tobj2) && maybe_tzobj_p(tobj2->vtm.zone)) {
-        zone_localtime(tobj2->vtm.zone, time);
-    }
-    return time;
-}
-
-#define time_succ rb_time_succ
-
 static VALUE
 ndigits_denominator(VALUE ndigits)
 {
@@ -5498,6 +5384,7 @@ tm_from_time(VALUE klass, VALUE time)
     ttm = DATA_PTR(tm);
     v = &vtm;
     GMTIMEW(ttm->timew = tobj->timew, v);
+    ttm->timew = wsub(ttm->timew, v->subsecx);
     v->subsecx = INT2FIX(0);
     v->zone = Qnil;
     ttm->vtm = *v;
@@ -5686,7 +5573,7 @@ Init_tm(VALUE outer, const char *name)
 #endif
     rb_define_method(tm, "initialize", tm_initialize, -1);
     rb_define_method(tm, "utc", tm_to_time, 0);
-    rb_alias(tm, rb_intern("to_time"), rb_intern("utc"));
+    rb_alias(tm, rb_intern_const("to_time"), rb_intern_const("utc"));
     rb_define_singleton_method(tm, "from_time", tm_from_time, 1);
     /* :startdoc:*/
 
@@ -5860,29 +5747,26 @@ rb_time_zone_abbreviation(VALUE zone, VALUE time)
 void
 Init_Time(void)
 {
-#undef rb_intern
-#define rb_intern(str) rb_intern_const(str)
-
-    id_submicro = rb_intern("submicro");
-    id_nano_num = rb_intern("nano_num");
-    id_nano_den = rb_intern("nano_den");
-    id_offset = rb_intern("offset");
-    id_zone = rb_intern("zone");
-    id_nanosecond = rb_intern("nanosecond");
-    id_microsecond = rb_intern("microsecond");
-    id_millisecond = rb_intern("millisecond");
-    id_nsec = rb_intern("nsec");
-    id_usec = rb_intern("usec");
-    id_local_to_utc = rb_intern("local_to_utc");
-    id_utc_to_local = rb_intern("utc_to_local");
-    id_year = rb_intern("year");
-    id_mon = rb_intern("mon");
-    id_mday = rb_intern("mday");
-    id_hour = rb_intern("hour");
-    id_min = rb_intern("min");
-    id_sec = rb_intern("sec");
-    id_isdst = rb_intern("isdst");
-    id_find_timezone = rb_intern("find_timezone");
+    id_submicro = rb_intern_const("submicro");
+    id_nano_num = rb_intern_const("nano_num");
+    id_nano_den = rb_intern_const("nano_den");
+    id_offset = rb_intern_const("offset");
+    id_zone = rb_intern_const("zone");
+    id_nanosecond = rb_intern_const("nanosecond");
+    id_microsecond = rb_intern_const("microsecond");
+    id_millisecond = rb_intern_const("millisecond");
+    id_nsec = rb_intern_const("nsec");
+    id_usec = rb_intern_const("usec");
+    id_local_to_utc = rb_intern_const("local_to_utc");
+    id_utc_to_local = rb_intern_const("utc_to_local");
+    id_year = rb_intern_const("year");
+    id_mon = rb_intern_const("mon");
+    id_mday = rb_intern_const("mday");
+    id_hour = rb_intern_const("hour");
+    id_min = rb_intern_const("min");
+    id_sec = rb_intern_const("sec");
+    id_isdst = rb_intern_const("isdst");
+    id_find_timezone = rb_intern_const("find_timezone");
 
     str_utc = rb_fstring_lit("UTC");
     rb_gc_register_mark_object(str_utc);
@@ -5893,8 +5777,6 @@ Init_Time(void)
     rb_include_module(rb_cTime, rb_mComparable);
 
     rb_define_alloc_func(rb_cTime, time_s_alloc);
-    rb_define_singleton_method(rb_cTime, "now", time_s_now, -1);
-    rb_define_singleton_method(rb_cTime, "at", time_s_at, -1);
     rb_define_singleton_method(rb_cTime, "utc", time_s_mkutc, -1);
     rb_define_singleton_method(rb_cTime, "gm", time_s_mkutc, -1);
     rb_define_singleton_method(rb_cTime, "local", time_s_mktime, -1);
@@ -5925,7 +5807,6 @@ Init_Time(void)
     rb_define_method(rb_cTime, "+", time_plus, 1);
     rb_define_method(rb_cTime, "-", time_minus, 1);
 
-    rb_define_method(rb_cTime, "succ", time_succ, 0);
     rb_define_method(rb_cTime, "round", time_round, -1);
     rb_define_method(rb_cTime, "floor", time_floor, -1);
     rb_define_method(rb_cTime, "ceil", time_ceil, -1);
@@ -5982,3 +5863,5 @@ Init_Time(void)
 
     rb_cTimeTM = Init_tm(rb_cTime, "tm");
 }
+
+#include "timev.rbinc"

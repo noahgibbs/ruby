@@ -203,6 +203,10 @@ monitor_synchronize(VALUE monitor)
 void
 Init_monitor(void)
 {
+#if HAVE_RB_EXT_RACTOR_SAFE
+    rb_ext_ractor_safe(true);
+#endif
+
     VALUE rb_cMonitor = rb_define_class("Monitor", rb_cObject);
     rb_define_alloc_func(rb_cMonitor, monitor_alloc);
 
@@ -216,6 +220,6 @@ Init_monitor(void)
     rb_define_method(rb_cMonitor, "mon_check_owner", monitor_check_owner, 0);
     rb_define_method(rb_cMonitor, "mon_owned?", monitor_owned_p, 0);
 
-    /* internal methods for MonitorMixin::ConditionalVariable */
+    /* internal methods for MonitorMixin::ConditionVariable */
     rb_define_method(rb_cMonitor, "wait_for_cond", monitor_wait_for_cond, 2);
 }

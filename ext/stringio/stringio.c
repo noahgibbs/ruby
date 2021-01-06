@@ -11,7 +11,7 @@
 
 **********************************************************************/
 
-#define STRINGIO_VERSION "0.1.4"
+#define STRINGIO_VERSION "3.0.0"
 
 #include "ruby.h"
 #include "ruby/io.h"
@@ -833,18 +833,6 @@ strio_each_byte(VALUE self)
 }
 
 /*
- *  This is a deprecated alias for #each_byte.
- */
-static VALUE
-strio_bytes(VALUE self)
-{
-    rb_warn("StringIO#bytes is deprecated; use #each_byte instead");
-    if (!rb_block_given_p())
-	return rb_enumeratorize(self, ID2SYM(rb_intern("each_byte")), 0, 0);
-    return strio_each_byte(self);
-}
-
-/*
  * call-seq:
  *   strio.getc   -> string or nil
  *
@@ -1058,18 +1046,6 @@ strio_each_char(VALUE self)
 }
 
 /*
- *  This is a deprecated alias for #each_char.
- */
-static VALUE
-strio_chars(VALUE self)
-{
-    rb_warn("StringIO#chars is deprecated; use #each_char instead");
-    if (!rb_block_given_p())
-	return rb_enumeratorize(self, ID2SYM(rb_intern("each_char")), 0, 0);
-    return strio_each_char(self);
-}
-
-/*
  * call-seq:
  *   strio.each_codepoint {|c| block }  -> strio
  *   strio.each_codepoint               -> anEnumerator
@@ -1099,18 +1075,6 @@ strio_each_codepoint(VALUE self)
 	rb_yield(UINT2NUM(c));
     }
     return self;
-}
-
-/*
- *  This is a deprecated alias for #each_codepoint.
- */
-static VALUE
-strio_codepoints(VALUE self)
-{
-    rb_warn("StringIO#codepoints is deprecated; use #each_codepoint instead");
-    if (!rb_block_given_p())
-	return rb_enumeratorize(self, ID2SYM(rb_intern("each_codepoint")), 0, 0);
-    return strio_each_codepoint(self);
 }
 
 /* Boyer-Moore search: copied from regex.c */
@@ -1361,18 +1325,6 @@ strio_each(int argc, VALUE *argv, VALUE self)
 	rb_yield(line);
     }
     return self;
-}
-
-/*
- *  This is a deprecated alias for #each_line.
- */
-static VALUE
-strio_lines(int argc, VALUE *argv, VALUE self)
-{
-    rb_warn("StringIO#lines is deprecated; use #each_line instead");
-    if (!rb_block_given_p())
-	return rb_enumeratorize(self, ID2SYM(rb_intern("each_line")), argc, argv);
-    return strio_each(argc, argv, self);
 }
 
 /*
@@ -1798,7 +1750,12 @@ void
 Init_stringio(void)
 {
 #undef rb_intern
-    VALUE StringIO = rb_define_class("StringIO", rb_cData);
+
+#ifdef HAVE_RB_EXT_RACTOR_SAFE
+  rb_ext_ractor_safe(true);
+#endif
+
+    VALUE StringIO = rb_define_class("StringIO", rb_cObject);
 
     rb_define_const(StringIO, "VERSION", rb_str_new_cstr(STRINGIO_VERSION));
 
@@ -1843,13 +1800,9 @@ Init_stringio(void)
 
     rb_define_method(StringIO, "each", strio_each, -1);
     rb_define_method(StringIO, "each_line", strio_each, -1);
-    rb_define_method(StringIO, "lines", strio_lines, -1);
     rb_define_method(StringIO, "each_byte", strio_each_byte, 0);
-    rb_define_method(StringIO, "bytes", strio_bytes, 0);
     rb_define_method(StringIO, "each_char", strio_each_char, 0);
-    rb_define_method(StringIO, "chars", strio_chars, 0);
     rb_define_method(StringIO, "each_codepoint", strio_each_codepoint, 0);
-    rb_define_method(StringIO, "codepoints", strio_codepoints, 0);
     rb_define_method(StringIO, "getc", strio_getc, 0);
     rb_define_method(StringIO, "ungetc", strio_ungetc, 1);
     rb_define_method(StringIO, "ungetbyte", strio_ungetbyte, 1);

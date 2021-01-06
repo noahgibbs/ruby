@@ -3131,7 +3131,7 @@ rb_thread_s_report_exc_set(VALUE self, VALUE val)
 static VALUE
 rb_thread_s_ignore_deadlock(VALUE _)
 {
-    return GET_THREAD()->vm->thread_ignore_deadlock ? Qtrue : Qfalse;
+    return Qtrue;
 }
 
 
@@ -3158,7 +3158,6 @@ rb_thread_s_ignore_deadlock(VALUE _)
 static VALUE
 rb_thread_s_ignore_deadlock_set(VALUE self, VALUE val)
 {
-    GET_THREAD()->vm->thread_ignore_deadlock = RTEST(val);
     return val;
 }
 
@@ -5597,39 +5596,7 @@ debug_deadlock_check(rb_ractor_t *r, VALUE msg)
 static void
 rb_check_deadlock(rb_ractor_t *r)
 {
-    if (GET_THREAD()->vm->thread_ignore_deadlock) return;
-
-    int found = 0;
-    rb_thread_t *th = NULL;
-    int sleeper_num = rb_ractor_sleeper_thread_num(r);
-    int ltnum = rb_ractor_living_thread_num(r);
-
-    if (ltnum > sleeper_num) return;
-    if (ltnum < sleeper_num) rb_bug("sleeper must not be more than vm_living_thread_num(vm)");
-    if (patrol_thread && patrol_thread != GET_THREAD()) return;
-
-    list_for_each(&r->threads.set, th, lt_node) {
-        if (th->status != THREAD_STOPPED_FOREVER || RUBY_VM_INTERRUPTED(th->ec)) {
-            found = 1;
-        }
-        else if (th->locking_mutex) {
-            rb_mutex_t *mutex = mutex_ptr(th->locking_mutex);
-            if (mutex->fiber == th->ec->fiber_ptr || (!mutex->fiber && !list_empty(&mutex->waitq))) {
-                found = 1;
-            }
-        }
-        if (found)
-          break;
-    }
-
-    if (!found) {
-	VALUE argv[2];
-	argv[0] = rb_eFatal;
-	argv[1] = rb_str_new2("No live threads left. Deadlock?");
-	debug_deadlock_check(r, argv[1]);
-        rb_ractor_sleeper_threads_dec(GET_RACTOR());
-	rb_threadptr_raise(r->threads.main, 2, argv);
-    }
+    /* Removed for faked 2.8 branch */
 }
 
 static void
